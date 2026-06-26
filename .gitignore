@@ -1,0 +1,102 @@
+# ---- Python bytecode / caches ----
+__pycache__/
+*.py[cod]
+*.pyc.*
+*$py.class
+
+# ---- C extensions ----
+*.so
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- PEP 582 ----
+__pypackages__/
+
+# ---- Distribution / packaging ----
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+site/
+
+# ---- Installer logs ----
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---- Test / coverage / type-check caches ----
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+hypothesis/
+.cache/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- IDE / editor ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+
+# ---- Environment / secrets ----
+.env
+.env.*
+*.env
+.envrc
+
+# ---- Python version managers ----
+.python-version
+
+# ---- Poetry / Pipenv (uncomment based on team preference) ----
+# poetry.lock
+# Pipfile.lock
+
+# ---- Runtime logs / temp ----
+*.log
+*.out
+*.err
+logs/
+tmp/
+temp/
+
+# ---- Application runtime outputs ----
+mock_dashcam_clips/
+storage/
+assets/output/
+
+# ---- Model artifacts (generated/large) ----
+models/*.pt
+models/*.onnx
+models/*.engine
