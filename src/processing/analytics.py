@@ -1,5 +1,5 @@
 # src/processing/analytics.py
- import logging
+import logging
 import time
 
 logger = logging.getLogger("DashcamCore")
