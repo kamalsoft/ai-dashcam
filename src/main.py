@@ -1,51 +1,39 @@
 # src/main.py
+
 import os
 import sys
-import multiprocessing
-
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["YOLO_VERBOSE"] = "False"
-
 import time
 import logging
 import threading
+import queue
 import cv2
-import signal
 import asyncio
-from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
+from contextlib import asynccontextmanager
 
 from src.camera.pi_camera import PiCamera
 from src.processing.analytics import ThreatAnalytics
 from src.storage.circular_buffer import CircularBuffer
 
-# Configure structured system logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [%(levelname)s] - %(message)s'
-)
-logger = logging.getLogger("DashcamCore")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+logger = logging.getLogger("NanovianDashcam")
 
-# Hardened Configuration Block for Raspberry Pi 5 Headless Deployment
 APP_CONFIG = {
-    "platform": "pi",  # Swapped to Pi natively
+    "platform": "pi",
     "storage": {
-        "clip_dir": "./mock_dashcam_clips",
-        "max_storage_mb": 1000,
+        "clip_dir": str(Path.home() / "ai-dashcam-clips"),
+        "max_storage_mb": 2000,
         "clip_duration_seconds": 45,
-        "incident_postbuffer_seconds": 2.0,
         "incident_clip_duration_seconds": 120.0,
     },
     "analytics": {
-        "min_confidence": 0.45,
-        "video_source": "/dev/video0",  # Pointing to your Winsafe device
+        "min_confidence": 0.40,
+        "video_source": "/dev/video0",
         "fps": 20.0,
-        "preview": False,               # Disabled cv2.imshow GUI dependencies
-        "preview_window_name": "AI Dashcam Preview",
     },
     "network": {
         "bind_address": "0.0.0.0",
@@ -57,9 +45,8 @@ class DashcamOrchestrator:
     def __init__(self, config: dict):
         self.config = config
         self.is_running = True
-        self.shutdown_event = threading.Event()
-        self.camera = PiCamera()  # Hard-targeted Pi processing engine
-        self.analytics = ThreatAnalytics(config.get("analytics", {}))
+        self.camera = PiCamera()
+        self.analytics = ThreatAnalytics(config["analytics"])
         self.storage_manager = CircularBuffer(
             clip_dir=config["storage"]["clip_dir"],
             max_storage_mb=config["storage"]["max_storage_mb"],
@@ -67,189 +54,205 @@ class DashcamOrchestrator:
         self.active_incident = None
         self.active_normal_clip = None
         self.normal_clip_started_at = 0.0
-        self.postbuffer_seconds = float(config["storage"].get("incident_postbuffer_seconds", 2.0))
-        self.clip_duration_seconds = float(config["storage"].get("clip_duration_seconds", 45))
-        self.incident_clip_duration_seconds = float(
-            config["storage"].get("incident_clip_duration_seconds", 120.0)
-        )
-        self.latest_encoded_frame = None  # Global frame cache pointer for web streaming
-        self._install_signal_handlers()
-
-    def _install_signal_handlers(self):
-        def _handler(signum, _frame):
-            self.is_running = False
-            self.shutdown_event.set()
-        signal.signal(signal.SIGINT, _handler)
-        signal.signal(signal.SIGTERM, _handler)
+        self.latest_encoded_frame = None
+        
+        # Thread-safe queue to pass frames to the ADAS AI processing thread without blocking video recording
+        self.ai_frame_queue = queue.Queue(maxsize=2) 
+        
+        # Late initialization of YOLO model to keep it on its own thread context
+        self.yolo_model = None 
 
     @staticmethod
     def _ts() -> str:
-        return time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
+        return time.strftime("%Y%m%d_%H%M%S")
 
     def _start_normal_clip(self):
-        clip_root = Path(self.config["storage"]["clip_dir"])
+        if self.active_incident: return
+        clip_root = Path(self.config["storage"]["clip_dir"]) / "normal"
         clip_root.mkdir(parents=True, exist_ok=True)
-        ts = self._ts()
-        clip_path = clip_root / f"clip_{ts}.avi"
+        clip_path = clip_root / f"clip_{self._ts()}.avi"
         self.camera.start_recording(str(clip_path))
         self.storage_manager.register_active_file(str(clip_path))
         self.active_normal_clip = str(clip_path)
         self.normal_clip_started_at = time.monotonic()
-        logger.info("Normal recording started: %s", clip_path.name)
+        logger.info(f"🟢 Continuous Loop Recording started: {clip_path.name}")
 
-    def _rotate_normal_clip_if_needed(self):
-        if self.active_normal_clip is None:
-            self._start_normal_clip()
-            return
-        if (time.monotonic() - self.normal_clip_started_at) >= self.clip_duration_seconds:
-            self.camera.stop_recording()
-            self.storage_manager.unregister_active_file(self.active_normal_clip)
-            self.active_normal_clip = None
-            self._start_normal_clip()
+    def trigger_incident_containment(self, frame):
+        """Halts standard loop recording and moves historical buffers safely to an incident file."""
+        if self.active_incident:
+            return  # Already handling an active incident
 
-    def _start_incident(self, frame):
-        if self.active_normal_clip is not None:
+        logger.warning("🚨 ADAS THREAT DETECTED! Initiating Incident Lockout Context...")
+        
+        if self.active_normal_clip:
             self.camera.stop_recording()
             self.storage_manager.unregister_active_file(self.active_normal_clip)
             self.active_normal_clip = None
 
-        ts = self._ts()
-        incident_dir = Path(self.config["storage"]["clip_dir"]) / f"incident_{ts}"
-        incident_dir.mkdir(parents=True, exist_ok=True)
+        incident_root = Path(self.config["storage"]["clip_dir"]) / "incidents" / f"incident_{self._ts()}"
+        incident_root.mkdir(parents=True, exist_ok=True)
 
-        snapshot_path = incident_dir / f"snapshot_{ts}.jpg"
-        incident_clip_path = incident_dir / f"clip_{ts}.avi"
+        snapshot_path = incident_root / "snapshot.jpg"
+        clip_path = incident_root / "incident_footage.avi"
 
-        cv2.imwrite(str(snapshot_path), frame)
-        self.storage_manager.register_active_file(str(incident_clip_path))
-        self.camera.write_pre_buffer_to_incident(str(incident_clip_path))
+        if frame is not None:
+            cv2.imwrite(str(snapshot_path), frame)
+
+        # Flush pre-buffer (historical frames) to the incident file
+        self.camera.write_pre_buffer_to_incident(str(clip_path))
+        self.storage_manager.register_active_file(str(clip_path))
 
         self.active_incident = {
-            "clip_path": str(incident_clip_path),
-            "last_seen": time.monotonic(),
-            "started_at": time.monotonic(),
+            "root_dir": str(incident_root),
+            "clip_path": str(clip_path),
+            "started_at": time.monotonic()
         }
-        logger.info("Incident recording started: %s", incident_clip_path)
 
-    def _stop_incident_and_resume_normal(self):
-        if self.active_incident is None:
-            return
-        self.camera.stop_recording()
-        self.storage_manager.unregister_active_file(self.active_incident["clip_path"])
-        logger.info("Incident recording stopped.")
-        self.active_incident = None
-        self._start_normal_clip()
+    def _adas_worker_loop(self):
+        """Asynchronous worker loop dedicated entirely to heavy ML inference tasks."""
+        from ultralytics import YOLO
+        logger.info("Loading YOLOv8 Model onto ADAS Context Thread...")
+        self.yolo_model = YOLO("yolov8n.pt")
+        logger.info("YOLOv8 Model loaded successfully. ADAS actively scanning.")
+
+        while self.is_running:
+            try:
+                # Grab the latest frame dropped by the camera stream loop
+                frame = self.ai_frame_queue.get(timeout=1.0)
+                
+                # Run YOLO tracking with persistence to assign consistent tracking IDs to vehicles
+                results = self.yolo_model.track(frame, persist=True, verbose=False)
+                
+                if results and len(results) > 0:
+                    boxes_data = results[0].boxes
+                    parsed_metadata = []
+                    
+                    if boxes_data is not None and boxes_data.id is not None:
+                        xyxy = boxes_data.xyxy.cpu().numpy()
+                        conf = boxes_data.conf.cpu().numpy()
+                        cls = boxes_data.cls.cpu().numpy()
+                        track_ids = boxes_data.id.cpu().numpy()
+                        
+                        for i in range(len(track_ids)):
+                            parsed_metadata.append({
+                                "box": xyxy[i].tolist(),
+                                "conf": float(conf[i]),
+                                "cls": int(cls[i]),
+                                "track_id": int(track_ids[i])
+                            })
+                    
+                    # Pass tracking metadata to your expansion metrics processing logic
+                    is_threat = self.analytics.process_inference_metadata(parsed_metadata)
+                    if is_threat:
+                        self.trigger_incident_containment(frame)
+                        
+                    # Render the visual bounding boxes on the live web stream dashboard
+                    annotated_frame = results[0].plot()
+                    ret, encoded_img = cv2.imencode('.jpg', annotated_frame)
+                    if ret:
+                        self.latest_encoded_frame = encoded_img.tobytes()
+                        
+                self.ai_frame_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"Error inside ADAS worker engine: {e}")
 
     def run_lifecycle(self):
-        """Executes inside a dedicated background thread to keep video ingestion fluid."""
+        """High-frequency thread for continuous, steady 20 FPS video recording."""
         self.camera.initialize(self.config["analytics"])
-        target_fps = float(getattr(self.camera, "target_fps", 20.0) or 20.0)
-        frame_duration = 1.0 / max(target_fps, 1.0)
-
+        
+        # Start the background ADAS AI processing worker thread
+        threading.Thread(target=self._adas_worker_loop, daemon=True).start()
+        
         self._start_normal_clip()
+        frame_duration = 1.0 / self.config["analytics"]["fps"]
 
         try:
-            while self.is_running and not self.shutdown_event.is_set():
+            while self.is_running:
                 loop_start = time.monotonic()
                 self.storage_manager.enforce_retention_policy_async(".avi")
 
-                if self.active_incident is None:
-                    self._rotate_normal_clip_if_needed()
+                # Handle incident recording duration timeouts
+                if self.active_incident:
+                    elapsed = time.monotonic() - self.active_incident["started_at"]
+                    if elapsed >= self.config["storage"]["incident_clip_duration_seconds"]:
+                        logger.info("Incident window expired. Resuming normal loop operations.")
+                        self.camera.stop_recording()
+                        self.storage_manager.unregister_active_file(self.active_incident["clip_path"])
+                        self.active_incident = None
+                        self._start_normal_clip()
+                else:
+                    # Handle normal clip rotation
+                    if (time.monotonic() - self.normal_clip_started_at) >= self.config["storage"]["clip_duration_seconds"]:
+                        self.camera.stop_recording()
+                        self.storage_manager.unregister_active_file(self.active_normal_clip)
+                        self.active_normal_clip = None
+                        self._start_normal_clip()
 
                 ok = self.camera.update_frame()
-                if not ok:
-                    self.is_running = False
-                    break
+                if not ok: break
 
-                frame = self.camera.get_latest_frame()
-                metadata = self.camera.get_ai_metadata()
-                threat = self.analytics.process_inference_metadata(metadata)
+                raw_frame = self.camera.get_latest_frame()
+                
+                # Push the raw frame to the ADAS processing queue if space is available
+                if raw_frame is not None:
+                    try:
+                        self.ai_frame_queue.put_nowait(raw_frame)
+                    except queue.Full:
+                        pass # Drop frames if the AI thread is running behind to keep video recording smooth
+                    
+                    # If the AI thread hasn't updated the live stream frame yet, fall back to the raw frame
+                    if self.latest_encoded_frame is None:
+                        ret, encoded_img = cv2.imencode('.jpg', raw_frame)
+                        if ret: self.latest_encoded_frame = encoded_img.tobytes()
 
-                if threat and self.active_incident is None and frame is not None:
-                    self._start_incident(frame)
-                elif threat and self.active_incident is not None:
-                    self.active_incident["last_seen"] = time.monotonic()
-
-                if self.active_incident is not None:
-                    incident_elapsed = time.monotonic() - self.active_incident["started_at"]
-                    if incident_elapsed >= self.incident_clip_duration_seconds:
-                        self._stop_incident_and_resume_normal()
-
-                # Update the stream pointer with a compressed MJPEG matrix for FastAPI
-                if frame is not None:
-                    ret, encoded_img = cv2.imencode('.jpg', frame)
-                    if ret:
-                        self.latest_encoded_frame = encoded_img.tobytes()
-
-                elapsed = time.monotonic() - loop_start
-                sleep_for = frame_duration - elapsed
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
+                sleep_for = frame_duration - (time.monotonic() - loop_start)
+                if sleep_for > 0: time.sleep(sleep_for)
         finally:
-            if self.active_incident is not None:
-                self._stop_incident_and_resume_normal()
-            if self.active_normal_clip is not None:
-                self.camera.stop_recording()
-                self.storage_manager.unregister_active_file(self.active_normal_clip)
-                self.active_normal_clip = None
-            self._shutdown()
-
-    def _shutdown(self):
-        self.shutdown_event.set()
-        try:
-            self.camera.stop_recording()
-        finally:
-            if self.active_incident is not None:
-                self.storage_manager.unregister_active_file(self.active_incident["clip_path"])
-                self.active_incident = None
             self.camera.close()
 
-# Initialize API Server and Orchestrator
-orchestrator = DashcamOrchestrator(APP_CONFIG)
-orchestrator_thread = None
-
+# FastAPI Server Context Routing Config Layer
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    """Start and stop the orchestrator thread using FastAPI lifespan events."""
-    global orchestrator_thread
-    orchestrator_thread = threading.Thread(target=orchestrator.run_lifecycle, daemon=True)
-    orchestrator_thread.start()
-    try:
-        yield
-    finally:
-        orchestrator.is_running = False
-        orchestrator.shutdown_event.set()
-        if orchestrator_thread is not None:
-            orchestrator_thread.join(timeout=5)
+async def lifespan(app: FastAPI):
+    threading.Thread(target=orchestrator.run_lifecycle, daemon=True).start()
+    yield
+    orchestrator.is_running = False
 
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
+orchestrator = DashcamOrchestrator(APP_CONFIG)
 
-async def frame_generator():
-    """Asynchronously streams the active memory-matrix to network ports."""
-    while orchestrator.is_running:
-        if orchestrator.latest_encoded_frame is not None:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + orchestrator.latest_encoded_frame + b'\r\n')
-        await asyncio.sleep(0.04)  # ~25 FPS throttling to minimize CPU churn
+# Mount the storage directory so files can be requested over HTTP
+Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
+app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
 
 @app.get("/video_feed")
 async def video_feed():
-    """Exposes real-time vehicle viewing link to web browsers."""
+    async def frame_generator():
+        while orchestrator.is_running:
+            if orchestrator.latest_encoded_frame:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + orchestrator.latest_encoded_frame + b'\r\n')
+            await asyncio.sleep(0.05)
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
-@app.get("/status")
-def get_status():
-    """Returns runtime state variables for local analytics tracking."""
-    return {
-        "system_active": orchestrator.is_running,
-        "incident_active": orchestrator.active_incident is not None,
-        "normal_clip": orchestrator.active_normal_clip
-    }
+@app.get("/list_incidents")
+def list_incidents():
+    """Returns a JSON catalog of all protected incident files available for playback."""
+    incidents_dir = Path(APP_CONFIG["storage"]["clip_dir"]) / "incidents"
+    if not incidents_dir.exists():
+        return {"incidents": []}
+    
+    entries = []
+    for p in sorted(incidents_dir.iterdir(), reverse=True):
+        if p.is_dir():
+            entries.append({
+                "incident_id": p.name,
+                "has_snapshot": (p / "snapshot.jpg").exists(),
+                "video_url": f"/clips/incidents/{p.name}/incident_footage.avi",
+                "snapshot_url": f"/clips/incidents/{p.name}/snapshot.jpg" if (p / "snapshot.jpg").exists() else None
+            })
+    return {"incidents": entries}
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "src.main:app",
-        host=APP_CONFIG["network"]["bind_address"], 
-        port=APP_CONFIG["network"]["port"], 
-        workers=1
-    )
+    uvicorn.run("src.main:app", host=APP_CONFIG["network"]["bind_address"], port=APP_CONFIG["network"]["port"], workers=1)
