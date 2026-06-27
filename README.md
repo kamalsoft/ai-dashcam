@@ -1,109 +1,106 @@
-# AI Dashcam
+# AI Dashcam (Raspberry Pi Production)
 
-Local-first AI dashcam for macOS and Raspberry Pi-style camera workflows.  
-It supports video playback, live capture, object detection, telemetry overlays, and incident snapshot/clip logging.
+Local-first AI dashcam designed for **Raspberry Pi deployment**.  
+macOS is used only as a **development/test environment**.
 
-## Features
+## Deployment Scope
 
-- Real-time video processing with OpenCV
-- YOLO-based object detection
-- Optical-flow speed estimation
-- GPS/address metadata simulation
-- Incident snapshots and buffered clip recording
-- Frame pacing with configurable FPS
-- Local HTTP media portal for recorded incidents
+- **Production Target:** Raspberry Pi 4/5 + CSI/USB camera
+- **Development Target:** macOS laptop (non-production simulation only)
+
+## Features (Pi-Centric)
+
+### Camera (Raspberry Pi)
+- `PiCamera` is the primary production camera driver.
+- Supports Raspberry Pi camera workflows (CSI / V4L2 / USB UVC).
+- Configurable resolution and FPS tuned for Pi hardware limits.
+- Monotonic frame pacing for real-time capture stability.
+- In-memory pre-buffer (`deque`) for pre-incident video context.
+- Telemetry HUD overlays rendered before writing/streaming.
+- Controlled recording lifecycle with safe release on shutdown.
+
+### Processing (Raspberry Pi)
+- Local YOLO inference pipeline optimized for edge runtime.
+- Threat analytics trigger incidents from inference metadata.
+- Full frame metadata scan for `intrusion_alert` detection.
+- Optical-flow speed estimation for motion-aware telemetry.
+- Local-first processing with no required cloud dependency.
+
+### Storage (Raspberry Pi)
+- Continuous normal clips in `mock_dashcam_clips/`.
+- Incident folders with timestamp format:
+  - `incident_YYYYMMDD_HHMMSS_mmm`
+- Incident assets:
+  - `snapshot_<timestamp>.jpg`
+  - `clip_<timestamp>.avi`
+- Pre-buffer flush into incident clip at trigger time.
+- Async retention policy enforcement for non-blocking cleanup.
+- Active-file protection to avoid deleting in-progress clips.
+
+## Pi Hardware Requirements
+
+- Raspberry Pi 5 (recommended) or Pi 4 (4GB+ minimum)
+- Camera Module v2/v3 or USB UVC webcam
+- 32GB+ microSD (64GB+ recommended) or external USB SSD
+- Official power supply (Pi 5: 27W USB-C recommended)
+- Passive heatsink minimum; active cooling recommended
+
+## Pi Runtime Requirements
+
+- Raspberry Pi OS (64-bit recommended)
+- Python 3.14
+- OpenCV, NumPy, Ultralytics, reverse-geocoder
+- Writable local storage path for clips and incidents
+
+## macOS Development Note
+
+macOS support is for:
+- local testing
+- pipeline validation
+- UI/preview debugging
+
+It is **not the production deployment target**.
 
 ## Project Structure
 
-- `src/main.py` — application entry point and orchestration
-- `src/camera/mac_camera.py` — macOS camera / video source pipeline
-- `src/camera/pi_camera.py` — Pi camera / generic camera pipeline
-- `src/camera/base_camera.py` — shared camera interface
-- `src/processing/analytics.py` — hazard and threat analysis
-- `src/storage/circular_buffer.py` — storage retention management
-- `docs/` — architecture, developer, hardware, and software requirements
+- `src/main.py` — orchestration and lifecycle state machine
+- `src/camera/base_camera.py` — camera contract
+- `src/camera/pi_camera.py` — Pi production camera driver
+- `src/camera/mac_camera.py` — macOS development camera driver
+- `src/processing/analytics.py` — threat analytics
+- `src/storage/circular_buffer.py` — retention management
+- `docs/` — architecture and hardware/software documentation
 
-## Requirements
+## Pi-First Roadmap
 
-- Python 3.14
-- macOS or Linux
-- OpenCV
-- NumPy
-- Ultralytics
-- reverse-geocoder
+### Camera
+- CSI camera auto-reconnect and fault recovery
+- Hardware encode acceleration profile for Pi
+- Camera calibration presets (mount angle/FOV)
 
-## Install
+### Processing
+- Pi-tuned inference backends (ONNX/TensorRT where applicable)
+- Event severity scoring and reduced false positives
+- Runtime telemetry/performance counters
 
-```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+### Storage
+- Incident metadata sidecar (`.json`) per event
+- Separate retention tiers for normal vs incident media
+- Integrity marker on finalized incident clips
 
-## Run
+## Future Pi Features
 
-```bash
-python src/main.py
-```
+### Camera
+- Dual-camera support (front/rear)
+- Low-light/night driving profile
+- Privacy masking regions
 
-## Configuration
+### Processing
+- Multi-object tracking IDs
+- Lane/near-miss behavioral analysis
+- Edge acceleration integrations
 
-The main runtime configuration is in `src/main.py`.
-
-Key settings:
-
-- `storage.clip_dir` — directory for clips and incident assets
-- `storage.max_storage_mb` — storage retention limit
-- `storage.clip_duration_seconds` — recording segment length
-- `analytics.min_confidence` — detection threshold
-- `analytics.video_source` — video file path or camera source
-- `network.bind_address` — local media server bind address
-- `network.port` — local media server port
-- `fps` — structural frame rate for playback and recording
-
-## FPS and Playback Control
-
-The application uses a structural FPS rate to prevent fast playback.
-
-- `camera.fps` is used as the source FPS
-- recording uses the same FPS value in `cv2.VideoWriter(...)`
-- the main loop uses `time.monotonic()` and `time.sleep()` to maintain real-time pacing
-
-If video appears too fast:
-- lower `fps` in config
-- ensure the source video FPS is detected correctly
-- verify the main loop is sleeping for `1 / fps` seconds per frame
-
-## Incident Logging
-
-When a threat is detected, the system creates a dedicated incident folder:
-
-```text
-incident_YYYYMMDD_HHMMSS_mmm
-```
-
-Inside each incident folder:
-
-- `snapshot_<timestamp>.jpg`
-- `clip_<timestamp>.avi`
-
-The timestamp format is:
-
-```text
-YYYYMMDD_HHMMSS_mmm
-```
-
-This keeps snapshot and clip files synchronized.
-
-## Documentation
-
-- [Architecture Overview](./docs/architecture.md)
-- [Developer Guide](./docs/developer-guide.md)
-- [Hardware Requirements](./docs/hardware-requirements.md)
-- [Software Requirements](./docs/software-requirements.md)
-
-## Notes
-
-- The app is designed to prefer local assets first.
-- If the video source cannot be opened, it falls back to live webcam input.
-- Press `q` in the video window to stop the camera loop.
+### Storage
+- Encrypted incident export bundles
+- Immutable incident lock mode
+- Background clip compaction/transcoding
