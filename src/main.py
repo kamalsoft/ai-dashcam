@@ -13,6 +13,7 @@ import threading
 import cv2
 import signal
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
@@ -204,13 +205,24 @@ class DashcamOrchestrator:
             self.camera.close()
 
 # Initialize API Server and Orchestrator
-app = FastAPI(title="Nanovian AI Dashcam Gateway")
 orchestrator = DashcamOrchestrator(APP_CONFIG)
+orchestrator_thread = None
 
-@app.on_event("startup")
-def startup_event():
-    """Spins off the video capture processing framework into its own core thread execution."""
-    threading.Thread(target=orchestrator.run_lifecycle, daemon=True).start()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start and stop the orchestrator thread using FastAPI lifespan events."""
+    global orchestrator_thread
+    orchestrator_thread = threading.Thread(target=orchestrator.run_lifecycle, daemon=True)
+    orchestrator_thread.start()
+    try:
+        yield
+    finally:
+        orchestrator.is_running = False
+        orchestrator.shutdown_event.set()
+        if orchestrator_thread is not None:
+            orchestrator_thread.join(timeout=5)
+
+app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 
 async def frame_generator():
     """Asynchronously streams the active memory-matrix to network ports."""
@@ -236,7 +248,7 @@ def get_status():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "src.main.app", 
+        "src.main:app",
         host=APP_CONFIG["network"]["bind_address"], 
         port=APP_CONFIG["network"]["port"], 
         workers=1
