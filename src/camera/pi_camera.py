@@ -34,19 +34,49 @@ class PiCamera(BaseCamera):
             self.target_fps = float(config.get("fps", 20.0))
 
             source = config.get("video_source", 0)
+            candidates = []
             if isinstance(source, str) and source.isdigit():
-                source = int(source)
+                candidates.append(int(source))
             elif isinstance(source, str) and source.startswith("/dev/video"):
+                candidates.append(source)
                 try:
-                    source = int(source.replace("/dev/video", ""))
+                    candidates.append(int(source.replace("/dev/video", "")))
                 except ValueError:
-                    source = 0
+                    pass
+            else:
+                candidates.append(source)
 
-            logger.info(f"Connecting to USB Camera index: {source} via V4L2...")
-            self.cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
-            
-            if not self.cap or not self.cap.isOpened():
-                raise RuntimeError(f"Could not open V4L2 device index {source}")
+            # Try a few common indexes as fallback on Pi when /dev/video0 is unavailable.
+            if 0 not in candidates:
+                candidates.append(0)
+            if 1 not in candidates:
+                candidates.append(1)
+            if 2 not in candidates:
+                candidates.append(2)
+
+            self.cap = None
+            opened_from = None
+            attempted = []
+            for candidate in candidates:
+                for backend in (cv2.CAP_V4L2, cv2.CAP_ANY):
+                    attempted.append(f"{candidate} via backend {backend}")
+                    logger.info("Connecting to camera source: %s (backend=%s)", candidate, backend)
+                    cap = cv2.VideoCapture(candidate, backend)
+                    if cap is not None and cap.isOpened():
+                        self.cap = cap
+                        opened_from = (candidate, backend)
+                        break
+                    if cap is not None:
+                        cap.release()
+                if self.cap is not None:
+                    break
+
+            if self.cap is None:
+                raise RuntimeError(
+                    "Could not open camera source. Attempted: " + ", ".join(attempted)
+                )
+
+            logger.info("Camera connected successfully using source=%s backend=%s", opened_from[0], opened_from[1])
 
             # Establish resolutions
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)

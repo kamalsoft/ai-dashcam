@@ -164,7 +164,13 @@ class DashcamOrchestrator:
 
     def run_lifecycle(self):
         """High-priority loop ensuring steady camera frame capture and video encoding."""
-        self.camera.initialize(self.config["analytics"])
+        try:
+            self.camera.initialize(self.config["analytics"])
+        except Exception as e:
+            logger.error("Camera initialization failed: %s", e)
+            self.is_running = False
+            return
+
         threading.Thread(target=self._adas_worker_loop, daemon=True).start()
         self._start_normal_clip()
         
