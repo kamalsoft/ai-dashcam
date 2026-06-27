@@ -20,9 +20,10 @@ class PiCamera(BaseCamera):
         self.frame_width = 640
         self.frame_height = 480
         self.target_fps = 20.0
+        # 300 frames at 20 FPS provides a rolling 15-second pre-incident memory buffer
         self.pre_buffer = deque(maxlen=300)
         
-        # Mutual exclusion lock to secure cross-thread VideoWriter operations
+        # Reentrant lock protects VideoWriter bindings from concurrent multi-threaded access
         self._lock = threading.RLock()
 
     def initialize(self, config: dict) -> None:
@@ -41,7 +42,13 @@ class PiCamera(BaseCamera):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
             if not self.cap or not self.cap.isOpened():
-                raise RuntimeError(f"Pi camera initialization failed for source: {source}")
+                raise RuntimeError(f"Pi camera hardware initialization failed for source: {source}")
+
+            # Optimize V4L2 drivers to eliminate motion blur and prevent overexposed license plates
+            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 1 = Manual Exposure Mode
+            self.cap.set(cv2.CAP_PROP_EXPOSURE, 150)     # Fast shutter value limits daytime/nighttime lens blur
+            self.cap.set(cv2.CAP_PROP_CONTRAST, 45)      # Enhanced edge contrast helps isolate license plate characters
+            self.cap.set(cv2.CAP_PROP_GAIN, 24)          # Sensor gain handles illumination recovery
 
             src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if src_fps > 0 and np.isfinite(src_fps):
@@ -63,7 +70,6 @@ class PiCamera(BaseCamera):
 
         annotated = self._apply_hud(frame.copy())
         
-        # Thread-safe update of frame caches and active writers
         with self._lock:
             self.latest_annotated_frame = annotated
             self.pre_buffer.append(annotated.copy())
@@ -71,21 +77,18 @@ class PiCamera(BaseCamera):
             if self.writer is not None and self.writer.isOpened():
                 try:
                     self.writer.write(annotated)
-                except cv2.error as e:
+                except Exception:
                     pass
 
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
-        """Safely locks the camera runtime while dumping historical RAM frames to disk."""
+        """Safely locks camera resources while flushing rolling RAM history to disk."""
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
         
         with self._lock:
-            # Safely spin up the clean file container
             self.start_recording(incident_clip_path)
-            
             if self.writer is not None and self.writer.isOpened():
-                # Snapshot historical frames explicitly to avoid mutation mid-write
                 historical_frames = list(self.pre_buffer)
                 for f in historical_frames:
                     if f is not None:
@@ -93,10 +96,10 @@ class PiCamera(BaseCamera):
 
     def start_recording(self, output_path: str) -> None:
         with self._lock:
-            self.stop_recording()  # Tear down old file descriptor completely
+            self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Using standard MP4V for maximum architectural stability on ARM64 Linux
+            # Using mp4v container for maximum structural stability on ARM64 platforms
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             self.writer = cv2.VideoWriter(
                 output_path,
