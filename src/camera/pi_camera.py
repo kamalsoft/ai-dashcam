@@ -1,3 +1,5 @@
+# src/camera/pi_camera.py
+
 import os
 import time
 from collections import deque
@@ -18,6 +20,7 @@ class PiCamera(BaseCamera):
         self.frame_width = 640
         self.frame_height = 480
         self.target_fps = 20.0
+        # 300 frames at 20fps gives exactly 15 seconds of rolling pre-incident memory safety
         self.pre_buffer = deque(maxlen=300)
 
     def initialize(self, config: dict) -> None:
@@ -26,13 +29,19 @@ class PiCamera(BaseCamera):
         self.frame_height = int(config.get("frame_height", 480))
         self.target_fps = float(config.get("fps", 20.0))
 
+        # Capture video_source safely. Defaults to /dev/video0
         source = config.get("video_source", 0)
+        
+        # If source is a string representing a digit, convert it to an integer for OpenCV index routing
+        if isinstance(source, str) and source.isdigit():
+            source = int(source)
+            
         self.cap = cv2.VideoCapture(source)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
         if not self.cap or not self.cap.isOpened():
-            raise RuntimeError("Pi camera initialization failed.")
+            raise RuntimeError(f"Pi camera initialization failed for source: {source}")
 
         src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
         if src_fps > 0 and np.isfinite(src_fps):
@@ -40,6 +49,7 @@ class PiCamera(BaseCamera):
 
     def _apply_hud(self, frame):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        # Anti-aliased high contrast cyan text overlay
         cv2.putText(frame, f"Time: {ts}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, f"FPS: {self.target_fps:.1f}", (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
         return frame
@@ -56,19 +66,30 @@ class PiCamera(BaseCamera):
         self.latest_annotated_frame = annotated
         self.pre_buffer.append(annotated.copy())
 
-        if self.writer is not None:
+        # If a video chunk file is actively open, commit the frame array directly
+        if self.writer is not None and self.writer.isOpened():
             self.writer.write(annotated)
 
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
+        """Safely flushes the internal circular RAM ring straight to disk storage."""
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
+        
+        # Instantiates the underlying stream container engine
         self.start_recording(incident_clip_path)
-        for f in self.pre_buffer:
-            self.writer.write(f)
+        
+        if self.writer is not None and self.writer.isOpened():
+            # Flush existing historical pre-buffer data sequentially
+            for f in list(self.pre_buffer):
+                if f is not None:
+                    self.writer.write(f)
 
     def start_recording(self, output_path: str) -> None:
+        self.stop_recording()  # Hard assurance to close prior file bindings before reallocating pointers
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Standard AVI compression profile optimized for ARM processing layouts
         fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self.writer = cv2.VideoWriter(
             output_path,
@@ -93,4 +114,3 @@ class PiCamera(BaseCamera):
         if self.cap is not None:
             self.cap.release()
             self.cap = None
-        cv2.destroyAllWindows()
