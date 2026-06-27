@@ -3,14 +3,6 @@ import os
 import sys
 import multiprocessing
 
-# Must be configured before heavy imports
-if sys.platform == "darwin":
-    try:
-        # Use spawn on macOS to avoid fork/atfork logging issues
-        multiprocessing.set_start_method("spawn", force=True)
-    except RuntimeError:
-        pass
-
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["YOLO_VERBOSE"] = "False"
@@ -18,14 +10,14 @@ os.environ["YOLO_VERBOSE"] = "False"
 import time
 import logging
 import threading
-import http.server
-import socketserver
 import cv2
 import signal
-import traceback
+import asyncio
 from pathlib import Path
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+import uvicorn
 
-from src.camera.mac_camera import MacCamera
 from src.camera.pi_camera import PiCamera
 from src.processing.analytics import ThreatAnalytics
 from src.storage.circular_buffer import CircularBuffer
@@ -37,26 +29,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("DashcamCore")
 
-# Configuration Block
+# Hardened Configuration Block for Raspberry Pi 5 Headless Deployment
 APP_CONFIG = {
-    "platform": "mac",
+    "platform": "pi",  # Swapped to Pi natively
     "storage": {
         "clip_dir": "./mock_dashcam_clips",
         "max_storage_mb": 1000,
         "clip_duration_seconds": 45,
         "incident_postbuffer_seconds": 2.0,
-        "incident_clip_duration_seconds": 120.0,  # 2 minutes
+        "incident_clip_duration_seconds": 120.0,
     },
     "analytics": {
         "min_confidence": 0.45,
-        "video_source": "./assets/test_dashcam.mp4",
+        "video_source": "/dev/video0",  # Pointing to your Winsafe device
         "fps": 20.0,
-        "preview": True,
+        "preview": False,               # Disabled cv2.imshow GUI dependencies
         "preview_window_name": "AI Dashcam Preview",
     },
     "network": {
         "bind_address": "0.0.0.0",
-        "port": 8080,
+        "port": 8000,
     },
 }
 
@@ -65,7 +57,7 @@ class DashcamOrchestrator:
         self.config = config
         self.is_running = True
         self.shutdown_event = threading.Event()
-        self.camera = MacCamera() if config.get("platform", "mac") == "mac" else PiCamera()
+        self.camera = PiCamera()  # Hard-targeted Pi processing engine
         self.analytics = ThreatAnalytics(config.get("analytics", {}))
         self.storage_manager = CircularBuffer(
             clip_dir=config["storage"]["clip_dir"],
@@ -79,7 +71,8 @@ class DashcamOrchestrator:
         self.incident_clip_duration_seconds = float(
             config["storage"].get("incident_clip_duration_seconds", 120.0)
         )
-        self._install_signal_handlers()  # <-- was missing
+        self.latest_encoded_frame = None  # Global frame cache pointer for web streaming
+        self._install_signal_handlers()
 
     def _install_signal_handlers(self):
         def _handler(signum, _frame):
@@ -95,10 +88,8 @@ class DashcamOrchestrator:
     def _start_normal_clip(self):
         clip_root = Path(self.config["storage"]["clip_dir"])
         clip_root.mkdir(parents=True, exist_ok=True)
-
         ts = self._ts()
         clip_path = clip_root / f"clip_{ts}.avi"
-
         self.camera.start_recording(str(clip_path))
         self.storage_manager.register_active_file(str(clip_path))
         self.active_normal_clip = str(clip_path)
@@ -109,7 +100,6 @@ class DashcamOrchestrator:
         if self.active_normal_clip is None:
             self._start_normal_clip()
             return
-
         if (time.monotonic() - self.normal_clip_started_at) >= self.clip_duration_seconds:
             self.camera.stop_recording()
             self.storage_manager.unregister_active_file(self.active_normal_clip)
@@ -117,7 +107,6 @@ class DashcamOrchestrator:
             self._start_normal_clip()
 
     def _start_incident(self, frame):
-        # pause normal writer
         if self.active_normal_clip is not None:
             self.camera.stop_recording()
             self.storage_manager.unregister_active_file(self.active_normal_clip)
@@ -131,38 +120,30 @@ class DashcamOrchestrator:
         incident_clip_path = incident_dir / f"clip_{ts}.avi"
 
         cv2.imwrite(str(snapshot_path), frame)
-
         self.storage_manager.register_active_file(str(incident_clip_path))
         self.camera.write_pre_buffer_to_incident(str(incident_clip_path))
 
         self.active_incident = {
             "clip_path": str(incident_clip_path),
             "last_seen": time.monotonic(),
-            "started_at": time.monotonic(),  # fixed-duration anchor
+            "started_at": time.monotonic(),
         }
         logger.info("Incident recording started: %s", incident_clip_path)
 
     def _stop_incident_and_resume_normal(self):
         if self.active_incident is None:
             return
-
         self.camera.stop_recording()
         self.storage_manager.unregister_active_file(self.active_incident["clip_path"])
         logger.info("Incident recording stopped.")
         self.active_incident = None
-
-        # resume normal recording in root clip directory
         self._start_normal_clip()
 
     def run_lifecycle(self):
+        """Executes inside a dedicated background thread to keep video ingestion fluid."""
         self.camera.initialize(self.config["analytics"])
         target_fps = float(getattr(self.camera, "target_fps", 20.0) or 20.0)
         frame_duration = 1.0 / max(target_fps, 1.0)
-
-        preview_enabled = bool(self.config["analytics"].get("preview", True))
-        preview_window = self.config["analytics"].get("preview_window_name", "AI Dashcam Preview")
-        if preview_enabled:
-            cv2.namedWindow(preview_window, cv2.WINDOW_NORMAL)
 
         self._start_normal_clip()
 
@@ -193,11 +174,11 @@ class DashcamOrchestrator:
                     if incident_elapsed >= self.incident_clip_duration_seconds:
                         self._stop_incident_and_resume_normal()
 
-                if preview_enabled and frame is not None:
-                    cv2.imshow(preview_window, frame)
-                    if (cv2.waitKey(1) & 0xFF) == ord("q"):
-                        self.is_running = False
-                        break
+                # Update the stream pointer with a compressed MJPEG matrix for FastAPI
+                if frame is not None:
+                    ret, encoded_img = cv2.imencode('.jpg', frame)
+                    if ret:
+                        self.latest_encoded_frame = encoded_img.tobytes()
 
                 elapsed = time.monotonic() - loop_start
                 sleep_for = frame_duration - elapsed
@@ -210,8 +191,6 @@ class DashcamOrchestrator:
                 self.camera.stop_recording()
                 self.storage_manager.unregister_active_file(self.active_normal_clip)
                 self.active_normal_clip = None
-            if preview_enabled:
-                cv2.destroyWindow(preview_window)
             self._shutdown()
 
     def _shutdown(self):
@@ -224,19 +203,41 @@ class DashcamOrchestrator:
                 self.active_incident = None
             self.camera.close()
 
-def main() -> int:
-    logger.info("Starting AI Dashcam...")
-    orchestrator = DashcamOrchestrator(APP_CONFIG)
-    try:
-        orchestrator.run_lifecycle()
-        logger.info("AI Dashcam stopped cleanly.")
-        return 0
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received. Shutting down cleanly.")
-        return 0
-    except Exception:
-        logger.exception("Fatal error in dashcam runtime")
-        return 1
+# Initialize API Server and Orchestrator
+app = FastAPI(title="Nanovian AI Dashcam Gateway")
+orchestrator = DashcamOrchestrator(APP_CONFIG)
+
+@app.on_event("startup")
+def startup_event():
+    """Spins off the video capture processing framework into its own core thread execution."""
+    threading.Thread(target=orchestrator.run_lifecycle, daemon=True).start()
+
+async def frame_generator():
+    """Asynchronously streams the active memory-matrix to network ports."""
+    while orchestrator.is_running:
+        if orchestrator.latest_encoded_frame is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + orchestrator.latest_encoded_frame + b'\r\n')
+        await asyncio.sleep(0.04)  # ~25 FPS throttling to minimize CPU churn
+
+@app.get("/video_feed")
+async def video_feed():
+    """Exposes real-time vehicle viewing link to web browsers."""
+    return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/status")
+def get_status():
+    """Returns runtime state variables for local analytics tracking."""
+    return {
+        "system_active": orchestrator.is_running,
+        "incident_active": orchestrator.active_incident is not None,
+        "normal_clip": orchestrator.active_normal_clip
+    }
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    uvicorn.run(
+        "src.main.app", 
+        host=APP_CONFIG["network"]["bind_address"], 
+        port=APP_CONFIG["network"]["port"], 
+        workers=1
+    )
