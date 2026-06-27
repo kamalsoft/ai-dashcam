@@ -1,5 +1,5 @@
 # src/camera/pi_camera.py
-import os
+ import os
 import time
 import threading
 import logging
@@ -47,16 +47,14 @@ class PiCamera(BaseCamera):
                 candidates.append(source)
 
             # Try a few common indexes as fallback on Pi when /dev/video0 is unavailable.
-            if 0 not in candidates:
-                candidates.append(0)
-            if 1 not in candidates:
-                candidates.append(1)
-            if 2 not in candidates:
-                candidates.append(2)
+            if 0 not in candidates: candidates.append(0)
+            if 1 not in candidates: candidates.append(1)
+            if 2 not in candidates: candidates.append(2)
 
             self.cap = None
             opened_from = None
             attempted = []
+            
             for candidate in candidates:
                 for backend in (cv2.CAP_V4L2, cv2.CAP_ANY):
                     attempted.append(f"{candidate} via backend {backend}")
@@ -72,9 +70,7 @@ class PiCamera(BaseCamera):
                     break
 
             if self.cap is None:
-                raise RuntimeError(
-                    "Could not open camera source. Attempted: " + ", ".join(attempted)
-                )
+                raise RuntimeError("Could not open camera source. Attempted: " + ", ".join(attempted))
 
             logger.info("Camera connected successfully using source=%s backend=%s", opened_from[0], opened_from[1])
 
@@ -83,9 +79,8 @@ class PiCamera(BaseCamera):
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
             # --- RESILIENT HARDWARE TUNING PROPERTIES ---
-            # We attempt to inject camera properties safely without crashing if the sensor doesn't support them
             props = [
-                (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"), # 1 = Manual Mode
+                (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"),
                 (cv2.CAP_PROP_EXPOSURE, 150, "Fast Shutter Speed Limit"),
                 (cv2.CAP_PROP_CONTRAST, 45, "High Text Contrast Expansion"),
                 (cv2.CAP_PROP_GAIN, 24, "Digital Gain Amplification")
@@ -96,7 +91,7 @@ class PiCamera(BaseCamera):
                 if success:
                     logger.info(f"  [SUCCESS] Set camera register: {desc} -> {val}")
                 else:
-                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not native supported by camera firmware.")
+                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not natively supported.")
 
             src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if src_fps > 0 and np.isfinite(src_fps):
@@ -127,7 +122,6 @@ class PiCamera(BaseCamera):
                     self.writer.write(annotated)
                 except Exception:
                     pass
-
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
@@ -146,10 +140,7 @@ class PiCamera(BaseCamera):
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             self.writer = cv2.VideoWriter(
-                output_path,
-                fourcc,
-                float(self.target_fps),
-                (int(self.frame_width), int(self.frame_height)),
+                output_path, fourcc, float(self.target_fps), (int(self.frame_width), int(self.frame_height))
             )
 
     def stop_recording(self) -> None:

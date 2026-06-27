@@ -1,4 +1,3 @@
-# src/main.py
 import os
 import sys
 import time
@@ -77,7 +76,6 @@ class DashcamOrchestrator:
             return
 
         logger.warning("🚨 ADAS THREAT VERIFIED! Initiating Locked Incident Containment...")
-        
         if self.active_normal_clip:
             self.camera.stop_recording()
             self.storage_manager.unregister_active_file(self.active_normal_clip)
@@ -102,7 +100,6 @@ class DashcamOrchestrator:
         }
 
     def _adas_worker_loop(self):
-        """Isolated background context thread dedicated to running ML model inference."""
         from ultralytics import YOLO
         logger.info("Loading YOLOv8 Model onto ADAS Context Thread...")
         self.yolo_model = YOLO("yolov8n.pt")
@@ -135,17 +132,13 @@ class DashcamOrchestrator:
                     if is_threat:
                         self.trigger_incident_containment(frame)
                         
-                    # Custom overlay rendering engine: paints tracking IDs and speed metrics
                     annotated_frame = frame.copy()
                     for det in parsed_metadata:
                         bx = det["box"]
                         speed_val = det.get("speed_mph", 0.0)
                         tid = det["track_id"]
                         
-                        # Draw vehicle bounding box outline
                         cv2.rectangle(annotated_frame, (int(bx[0]), int(bx[1])), (int(bx[2]), int(bx[3])), (0, 255, 0), 2)
-                        
-                        # Generate speed text overlay label
                         speed_label = f"ID: {tid} | {abs(speed_val):.1f} MPH"
                         cv2.putText(
                             annotated_frame, speed_label, (int(bx[0]), int(bx[1]) - 10),
@@ -163,7 +156,6 @@ class DashcamOrchestrator:
                 logger.error(f"Error inside ADAS worker engine: {e}")
 
     def run_lifecycle(self):
-        """High-priority loop ensuring steady camera frame capture and video encoding."""
         try:
             self.camera.initialize(self.config["analytics"])
         except Exception as e:
@@ -207,6 +199,8 @@ class DashcamOrchestrator:
                     except queue.Full:
                         pass
                     
+                    # Fallback dynamic interface rendering to keep the web view fluid 
+                    # if the ML thread isn't overwriting it quickly enough
                     if self.latest_encoded_frame is None:
                         ret, encoded_img = cv2.imencode('.jpg', raw_frame)
                         if ret: 
@@ -227,7 +221,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 orchestrator = DashcamOrchestrator(APP_CONFIG)
 
-# Mount direct folder gateway path to allow streaming and downloads over HTTP
 Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
 
