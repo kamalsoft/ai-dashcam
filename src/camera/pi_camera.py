@@ -2,12 +2,15 @@
 import os
 import time
 import threading
+import logging
 from collections import deque
 
 import cv2
 import numpy as np
 
 from src.camera.base_camera import BaseCamera
+
+logger = logging.getLogger("NanovianDashcam")
 
 class PiCamera(BaseCamera):
     def __init__(self):
@@ -20,10 +23,7 @@ class PiCamera(BaseCamera):
         self.frame_width = 640
         self.frame_height = 480
         self.target_fps = 20.0
-        # 300 frames at 20 FPS provides a rolling 15-second pre-incident memory buffer
         self.pre_buffer = deque(maxlen=300)
-        
-        # Reentrant lock protects VideoWriter bindings from concurrent multi-threaded access
         self._lock = threading.RLock()
 
     def initialize(self, config: dict) -> None:
@@ -36,19 +36,37 @@ class PiCamera(BaseCamera):
             source = config.get("video_source", 0)
             if isinstance(source, str) and source.isdigit():
                 source = int(source)
-                
-            self.cap = cv2.VideoCapture(source)
+            elif isinstance(source, str) and source.startswith("/dev/video"):
+                try:
+                    source = int(source.replace("/dev/video", ""))
+                except ValueError:
+                    source = 0
+
+            logger.info(f"Connecting to USB Camera index: {source} via V4L2...")
+            self.cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+            
+            if not self.cap or not self.cap.isOpened():
+                raise RuntimeError(f"Could not open V4L2 device index {source}")
+
+            # Establish resolutions
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
-            if not self.cap or not self.cap.isOpened():
-                raise RuntimeError(f"Pi camera hardware initialization failed for source: {source}")
+            # --- RESILIENT HARDWARE TUNING PROPERTIES ---
+            # We attempt to inject camera properties safely without crashing if the sensor doesn't support them
+            props = [
+                (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"), # 1 = Manual Mode
+                (cv2.CAP_PROP_EXPOSURE, 150, "Fast Shutter Speed Limit"),
+                (cv2.CAP_PROP_CONTRAST, 45, "High Text Contrast Expansion"),
+                (cv2.CAP_PROP_GAIN, 24, "Digital Gain Amplification")
+            ]
 
-            # Optimize V4L2 drivers to eliminate motion blur and prevent overexposed license plates
-            self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)  # 1 = Manual Exposure Mode
-            self.cap.set(cv2.CAP_PROP_EXPOSURE, 150)     # Fast shutter value limits daytime/nighttime lens blur
-            self.cap.set(cv2.CAP_PROP_CONTRAST, 45)      # Enhanced edge contrast helps isolate license plate characters
-            self.cap.set(cv2.CAP_PROP_GAIN, 24)          # Sensor gain handles illumination recovery
+            for prop_id, val, desc in props:
+                success = self.cap.set(prop_id, val)
+                if success:
+                    logger.info(f"  [SUCCESS] Set camera register: {desc} -> {val}")
+                else:
+                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not native supported by camera firmware.")
 
             src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if src_fps > 0 and np.isfinite(src_fps):
@@ -83,9 +101,7 @@ class PiCamera(BaseCamera):
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
-        """Safely locks camera resources while flushing rolling RAM history to disk."""
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
-        
         with self._lock:
             self.start_recording(incident_clip_path)
             if self.writer is not None and self.writer.isOpened():
@@ -98,8 +114,6 @@ class PiCamera(BaseCamera):
         with self._lock:
             self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
-            # Using mp4v container for maximum structural stability on ARM64 platforms
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             self.writer = cv2.VideoWriter(
                 output_path,
