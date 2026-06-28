@@ -20,7 +20,6 @@ from src.camera.pi_camera import PiCamera
 from src.processing.analytics import ThreatAnalytics
 from src.storage.circular_buffer import CircularBuffer
 
-# Initialize logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger("NanovianDashcam")
 
@@ -42,8 +41,8 @@ APP_CONFIG = {
     },
     "user_preferences": {
         "timezone": "America/Chicago",
-        "time_format_24h": False,           # False = 12-Hour Clock with AM/PM
-        "date_format": "%Y-%m-%d",          # Standard ISO-Style notation
+        "time_format_24h": False,
+        "date_format": "%Y-%m-%d",
         "custom_location_label": "Naperville, IL",
     }
 }
@@ -115,7 +114,6 @@ class DashcamOrchestrator:
         }
 
     def _adas_worker_loop(self):
-        """Isolated background context thread dedicated to running ML model inference."""
         from ultralytics import YOLO
         logger.info("Loading YOLOv8 Model onto ADAS Context Thread...")
         self.yolo_model = YOLO("yolov8n.pt")
@@ -172,7 +170,6 @@ class DashcamOrchestrator:
                 logger.error(f"Error inside ADAS worker engine: {e}")
 
     def run_lifecycle(self):
-        """High-priority loop ensuring steady camera frame capture and video encoding."""
         try:
             self.camera.initialize(self.config)
         except Exception as e:
@@ -207,7 +204,6 @@ class DashcamOrchestrator:
 
                 ok = self.camera.update_frame()
                 if not ok: 
-                    # If stopped programmatically, sleep briefly to avoid pegging cpu core
                     time.sleep(0.05)
                     continue
 
@@ -238,16 +234,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 orchestrator = DashcamOrchestrator(APP_CONFIG)
 
-# Mount root clip storage directory for static layout delivery
 Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard_home_screen():
-    """Serves the Single Page Application UI control dashboard framework."""
     template_path = Path(__file__).parent / "templates" / "index.html"
     if not template_path.exists():
-        raise HTTPException(status_code=404, detail="Web interface HTML template asset missing from source tree.")
+        raise HTTPException(status_code=404, detail="Web interface HTML template asset missing.")
     return template_path.read_text()
 
 @app.get("/video_feed")
@@ -279,7 +273,6 @@ def list_incidents():
 
 @app.post("/update_preferences")
 def update_preferences(prefs: UserPreferencesSchema):
-    """Hot-reloads user regional parameters into app memory on-the-fly."""
     try:
         APP_CONFIG["user_preferences"]["custom_location_label"] = prefs.custom_location_label
         APP_CONFIG["user_preferences"]["time_format_24h"] = prefs.time_format_24h
@@ -287,13 +280,10 @@ def update_preferences(prefs: UserPreferencesSchema):
         logger.info("System operational parameters updated safely over API.")
         return {"status": "success", "message": "Global preferences applied successfully."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to flash targeted system configurations: {str(e)}")
-
-# --- ADMINISTRATIVE SYSTEM PIPELINE & STORAGE ACTIONS ---
+        raise HTTPException(status_code=500, detail=f"Failed to flash configuration: {str(e)}")
 
 @app.post("/api/system/stop")
 def stop_recording_lifecycle():
-    """Immediately kills the active recording descriptors."""
     with orchestrator.camera._lock:
         if not orchestrator.active_normal_clip and not orchestrator.active_incident:
             return {"status": "ignored", "message": "Recording loops are already dormant."}
@@ -309,7 +299,6 @@ def stop_recording_lifecycle():
 
 @app.post("/api/system/start")
 def start_recording_lifecycle():
-    """Forces standard continuous recording loop initialization."""
     with orchestrator.camera._lock:
         if orchestrator.active_normal_clip or orchestrator.active_incident:
             raise HTTPException(status_code=400, detail="Recording pipeline is already active.")
@@ -320,7 +309,6 @@ def start_recording_lifecycle():
 
 @app.post("/api/system/restart")
 def restart_recording_lifecycle():
-    """Cycles recording handles safely without requiring a hardware process termination."""
     with orchestrator.camera._lock:
         logger.info("Cycle reboot requested over API. Flushing IO streams...")
         if orchestrator.active_normal_clip or orchestrator.active_incident:
@@ -335,7 +323,6 @@ def restart_recording_lifecycle():
 
 @app.post("/api/storage/clear")
 def clear_all_saved_media():
-    """Permanently purges both continuous clips and event threat folders."""
     with orchestrator.camera._lock:
         logger.warning("CRITICAL: Administrative Storage Clear commanded over API portal.")
         orchestrator.camera.stop_recording()
@@ -356,14 +343,12 @@ def clear_all_saved_media():
 
 @app.post("/api/storage/clean")
 def clean_stale_storage():
-    """Forcefully triggers your automated retention policy parser on-demand."""
     logger.info("On-demand maintenance sweep initialized manually over API gateway.")
     orchestrator.storage_manager.enforce_retention_policy_async(".mp4")
     return {"status": "success", "message": "Garbage collector sweep finished processing storage array profiles."}
 
 @app.get("/download_clip")
 def download_clip(clip_relative_path: str):
-    """Secure direct download handler guarding against path-traversal attacks."""
     base_storage_dir = Path(APP_CONFIG["storage"]["clip_dir"])
     target_file_path = (base_storage_dir / clip_relative_path).resolve()
 

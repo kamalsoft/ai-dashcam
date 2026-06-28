@@ -30,11 +30,12 @@ class PiCamera(BaseCamera):
     def initialize(self, config: dict) -> None:
         with self._lock:
             self.config = config
-            self.frame_width = int(config.get("frame_width", 640))
-            self.frame_height = int(config.get("frame_height", 480))
-            self.target_fps = float(config.get("fps", 20.0))
+            analytics_cfg = config.get("analytics", {})
+            self.frame_width = int(analytics_cfg.get("frame_width", 640))
+            self.frame_height = int(analytics_cfg.get("frame_height", 480))
+            self.target_fps = float(analytics_cfg.get("fps", 20.0))
 
-            source = config.get("video_source", 0)
+            source = analytics_cfg.get("video_source", 0)
             candidates = []
             if isinstance(source, str) and source.isdigit():
                 candidates.append(int(source))
@@ -47,7 +48,6 @@ class PiCamera(BaseCamera):
             else:
                 candidates.append(source)
 
-            # Fallback scanning candidates on ARM architectures if target index is busy
             if 0 not in candidates: candidates.append(0)
             if 1 not in candidates: candidates.append(1)
             if 2 not in candidates: candidates.append(2)
@@ -75,12 +75,10 @@ class PiCamera(BaseCamera):
 
             logger.info("Camera connected successfully using source=%s backend=%s", opened_from[0], opened_from[1])
 
-            # Apply target resolution profiles
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
             # --- RESILIENT V4L2 HARDWARE TUNING PROPERTIES ---
-            # Set high-speed manual shutter metrics to capture legible moving plates and restrict headlight glare
             props = [
                 (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"),
                 (cv2.CAP_PROP_EXPOSURE, 150, "Fast Shutter Speed Limit"),
@@ -101,24 +99,20 @@ class PiCamera(BaseCamera):
 
     def _apply_hud(self, frame):
         """Applies highly-configurable real-time text layers using regional preferences."""
-        # Pull formatting structures out of configuration or fall back to safe defaults
         pref = self.config.get("user_preferences", {})
         date_fmt = pref.get("date_format", "%Y-%m-%d")
         use_24h = pref.get("time_format_24h", False)
         loc_label = pref.get("custom_location_label", "GPS Monitoring")
 
-        # Set up time format mask based on preference
         time_fmt = "%H:%M:%S" if use_24h else "%I:%M:%S %p"
         full_timestamp_mask = f"{date_fmt} {time_fmt}"
         
-        # Build out strings
         ts = time.strftime(full_timestamp_mask)
         geo_str = f"FPS: {self.target_fps:.1f} | {loc_label}"
 
-        # Paint overlays on frame copy
         cv2.putText(frame, f"Time: {ts}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, geo_str, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-      
+        
         return frame
 
     def update_frame(self) -> bool:
@@ -129,14 +123,12 @@ class PiCamera(BaseCamera):
         if not ok or frame is None:
             return False
 
-        # Apply spatial text overlay to raw matrix copy
         annotated = self._apply_hud(frame.copy())
         
         with self._lock:
             self.latest_annotated_frame = annotated
             self.pre_buffer.append(annotated.copy())
 
-            # Simultaneously write out frame bytes to the file if an active recorder descriptor exists
             if self.writer is not None and self.writer.isOpened():
                 try:
                     self.writer.write(annotated)
@@ -146,12 +138,11 @@ class PiCamera(BaseCamera):
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
-        """Flushes the rolling 15-second pre-buffer safely to disk inside a cross-thread lock block."""
+        """Flushes the rolling pre-buffer safely to disk inside a cross-thread lock block."""
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
         with self._lock:
             self.start_recording(incident_clip_path)
             if self.writer is not None and self.writer.isOpened():
-                # Materialize the thread-safe array copy immediately before file compilation
                 historical_frames = list(self.pre_buffer)
                 for f in historical_frames:
                     if f is not None:
@@ -162,8 +153,8 @@ class PiCamera(BaseCamera):
             self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Using avc1 layout layer container format for hardware compatibility on Linux ARM environments
-            fourcc = cv2.VideoWriter_fourcc(*"avc1") # avc1 matches the web-native H.264 standard
+            # --- USE X264 FOR STABLE SOFTWARE H.264 ENCODING IN BROWSERS ---
+            fourcc = cv2.VideoWriter_fourcc(*"X264")
             self.writer = cv2.VideoWriter(
                 output_path,
                 fourcc,
