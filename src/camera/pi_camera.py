@@ -8,6 +8,12 @@ from collections import deque
 import cv2
 import numpy as np
 
+# Import the native Raspberry Pi camera engine
+try:
+    from picamera2 import Picamera2
+except Exception:  # pragma: no cover - runtime dependency on Pi images
+    Picamera2 = None
+
 from src.camera.base_camera import BaseCamera
 
 logger = logging.getLogger("NanovianDashcam")
@@ -15,6 +21,7 @@ logger = logging.getLogger("NanovianDashcam")
 class PiCamera(BaseCamera):
     def __init__(self):
         super().__init__()
+        self.picam = None
         self.cap = None
         self.writer = None
         self.config = {}
@@ -23,7 +30,7 @@ class PiCamera(BaseCamera):
         self.frame_width = 640
         self.frame_height = 480
         self.target_fps = 20.0
-        # 300 frames at 20 FPS maintains a rolling 15-second pre-incident historical RAM ring buffer
+        # 300 frames maintains a rolling 15-second pre-incident historical RAM ring buffer
         self.pre_buffer = deque(maxlen=300)
         self._lock = threading.RLock()
 
@@ -34,34 +41,66 @@ class PiCamera(BaseCamera):
             self.frame_width = int(analytics_cfg.get("frame_width", 640))
             self.frame_height = int(analytics_cfg.get("frame_height", 480))
             self.target_fps = float(analytics_cfg.get("fps", 20.0))
+            source = analytics_cfg.get("video_source", "/dev/video0")
+            use_picamera2 = bool(analytics_cfg.get("use_picamera2", True))
 
-            logger.info("Initializing Raspberry Pi 5 PiSP GStreamer source pipeline...")
-            
-            # Formulate a native GStreamer ingestion string targeted at the new PiSP layer
-            gst_pipeline = (
-                f"libcamerasrc ! "
-                f"video/x-raw, width={self.frame_width}, height={self.frame_height}, framerate={int(self.target_fps)}/1 ! "
-                f"videoconvert ! appsink drop=true max-buffers=2"
-            )
+            self.picam = None
+            self.cap = None
 
-            logger.info("Connecting to camera via GStreamer: %s", gst_pipeline)
-            
-            # Initialize VideoCapture via GStreamer backend explicitly
-            self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            # Primary path: native Pi camera stack.
+            if use_picamera2 and Picamera2 is not None:
+                try:
+                    logger.info("Initializing native Raspberry Pi camera layer (Picamera2)...")
+                    self.picam = Picamera2()
+                    cam_config = self.picam.create_preview_configuration(
+                        main={"format": "BGR24", "size": (self.frame_width, self.frame_height)},
+                        controls={"FrameRate": self.target_fps},
+                    )
+                    self.picam.configure(cam_config)
+                    self.picam.start()
+                    logger.info("Picamera2 connected successfully.")
+                    return
+                except Exception as e:
+                    logger.warning("Picamera2 initialization failed: %s", e)
 
-            if self.cap is None or not self.cap.isOpened():
-                raise RuntimeError(f"Could not open camera source using Pi5 GStreamer pipeline string: {gst_pipeline}")
+            # Fallback path: OpenCV capture (supports GStreamer pipelines and V4L2 indexes).
+            attempted = []
+            candidates = []
+            if isinstance(source, str) and "!" in source:
+                # Treat string as a GStreamer pipeline.
+                candidates.append((source, cv2.CAP_GSTREAMER, "gstreamer-pipeline"))
+                candidates.append((source, cv2.CAP_ANY, "generic-pipeline"))
+            elif isinstance(source, str) and source.startswith("/dev/video"):
+                candidates.append((source, cv2.CAP_V4L2, "v4l2-device"))
+                try:
+                    idx = int(source.replace("/dev/video", ""))
+                    candidates.append((idx, cv2.CAP_V4L2, "v4l2-index"))
+                except ValueError:
+                    pass
+            elif isinstance(source, str) and source.isdigit():
+                candidates.append((int(source), cv2.CAP_V4L2, "v4l2-index"))
+            else:
+                candidates.append((source, cv2.CAP_V4L2, "source"))
 
-            logger.info("Camera connected successfully using libcamerasrc pipeline backend.")
+            # Common camera indexes as final fallback.
+            for idx in (0, 1, 2):
+                candidates.append((idx, cv2.CAP_V4L2, "fallback-index"))
+                candidates.append((idx, cv2.CAP_ANY, "fallback-any"))
 
-            # --- HARDWARE TUNING NOTE ---
-            # Native register parameter modifications (e.g., manual exposure limits) are handled 
-            # via rpicam configurations or camera tuning JSON maps inside the Debian OS layer 
-            # rather than raw V4L2 ioctl properties on Raspberry Pi 5 hardware.
+            for src, backend, label in candidates:
+                attempted.append(f"{label}:{src}@{backend}")
+                logger.info("Connecting to camera source=%s backend=%s (%s)", src, backend, label)
+                cap = cv2.VideoCapture(src, backend)
+                if cap is not None and cap.isOpened():
+                    self.cap = cap
+                    self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
+                    self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+                    logger.info("OpenCV camera connected successfully using source=%s backend=%s", src, backend)
+                    return
+                if cap is not None:
+                    cap.release()
 
-            src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
-            if src_fps > 0 and np.isfinite(src_fps):
-                self.target_fps = src_fps
+            raise RuntimeError("Could not open camera source. Attempted: " + ", ".join(attempted))
 
     def _apply_hud(self, frame):
         """Applies highly-configurable real-time text layers using regional preferences."""
@@ -82,11 +121,15 @@ class PiCamera(BaseCamera):
         return frame
 
     def update_frame(self) -> bool:
-        if not self.cap or not self.cap.isOpened():
-            return False
+        frame = None
+        if self.picam is not None:
+            frame = self.picam.capture_array()
+        elif self.cap is not None and self.cap.isOpened():
+            ok, grabbed = self.cap.read()
+            if ok:
+                frame = grabbed
 
-        ok, frame = self.cap.read()
-        if not ok or frame is None:
+        if frame is None:
             return False
 
         annotated = self._apply_hud(frame.copy())
@@ -121,21 +164,30 @@ class PiCamera(BaseCamera):
         with self._lock:
             self.stop_recording()
             
-            # Force Matroska encapsulation to enforce clean software layout
             if not output_path.endswith(".mkv"):
                 output_path = os.path.splitext(output_path)[0] + ".mkv"
 
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # --- FORCE SOFTWARE LIBX264 COMPRESSION ---
-            fourcc = cv2.VideoWriter_fourcc(*"X264")
-            self.writer = cv2.VideoWriter(
-                output_path,
-                fourcc,
-                float(self.target_fps),
-                (int(self.frame_width), int(self.frame_height))
+            fps = float(self.target_fps)
+            frame_size = (int(self.frame_width), int(self.frame_height))
+            codec_candidates = ["MJPG", "XVID", "mp4v"]
+
+            self.writer = None
+            for codec in codec_candidates:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+                if writer is not None and writer.isOpened():
+                    self.writer = writer
+                    logger.info("VideoWriter initialized: codec=%s path=%s", codec, output_path)
+                    return
+                if writer is not None:
+                    writer.release()
+
+            raise RuntimeError(
+                "Failed to initialize VideoWriter for "
+                f"{output_path}. Tried codecs: {', '.join(codec_candidates)}"
             )
-            logger.info(f"🎥 VideoWriter handle allocated cleanly: {output_path}")
 
     def stop_recording(self) -> None:
         with self._lock:
@@ -153,6 +205,9 @@ class PiCamera(BaseCamera):
     def close(self) -> None:
         with self._lock:
             self.stop_recording()
+            if self.picam is not None:
+                self.picam.stop()
+                self.picam = None
             if self.cap is not None:
                 self.cap.release()
                 self.cap = None
