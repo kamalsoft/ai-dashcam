@@ -14,11 +14,10 @@ from smbus2 import SMBus
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
 logger = logging.getLogger("DashcamServer")
 
-# Global state sharing framework
 class CameraState:
     def __init__(self):
-        self.latest_frame = None       # Clear raw matrix
-        self.annotated_frame = None    # Frame with AI bounding boxes
+        self.latest_frame = None       # Clean local image matrix (BGR space)
+        self.annotated_frame = None    # Image matrix with YOLO bounding boxes
         self.lock = threading.Lock()
         self.is_running = False
         self.picam_instance = None
@@ -28,42 +27,41 @@ class CameraState:
 
 state = CameraState()
 
-# Motorized Hardware Control Constants (I2C)
-I2C_BUS_INDEX = 1        # Standard Pi 5 I2C interface pins (SDA/SCL)
-MOTOR_I2C_ADDR = 0x40    # Default target address for PCA9685/Servo drivers
+# Motorized Hardware Constants (I2C)
+I2C_BUS_INDEX = 1        # Standard Raspberry Pi 5 I2C Hardware Pins (SDA/SCL)
+MOTOR_I2C_ADDR = 0x40    # Targeted controller register address base (e.g., PCA9685)
 
 def init_motor_hardware():
-    """Initializes the I2C bus channel for motorized pan-tilt logic."""
+    """Maps system device nodes to expose active I2C channels."""
     try:
         state.i2c_bus = SMBus(I2C_BUS_INDEX)
-        logger.info(f"Connected to I2C interface bus on index {I2C_BUS_INDEX}")
+        logger.info(f"Connected to physical I2C interface bus on index {I2C_BUS_INDEX}")
     except Exception as e:
-        logger.warning(f"I2C Bus initialization bypassed (Hardware missing/unplugged): {e}")
+        logger.warning(f"I2C Hardware Layer bypassed (Check connections or enable via raspi-config): {e}")
 
 def command_motor_movement(pan_angle: int, tilt_angle: int):
     """
-    Sends raw programmatic positioning bits to the motorized driver base.
+    Sends raw hexadecimal positional tracking steps to the driver base.
     """
     if state.i2c_bus is None:
         return
     try:
-        # Example register mapping instructions to a PCA9685 controller
-        # In a custom driver deployment, replace these with your specific registry maps
-        logger.info(f"Motor command fired -> Pan: {pan_angle}°, Tilt: {tilt_angle}°")
-        # state.i2c_bus.write_byte_data(MOTOR_I2C_ADDR, register, value)
+        # Placeholder for target register mapping logic
+        logger.info(f"Motor positioning packet generated -> Pan: {pan_angle}°, Tilt: {tilt_angle}°")
     except Exception as e:
-        logger.error(f"Failed to transmit I2C motor step data packet: {e}")
+        logger.error(f"Failed to transmit I2C motor bus communication packet: {e}")
 
 def initialize_camera():
     """
-    Initializes Picamera2 using a wide-angle widescreen format profile.
+    Sets up Picamera2 using a true wide-angle widescreen resolution layout (16:9).
     """
     try:
         logger.info("Initializing native Raspberry Pi 5 wide-angle camera layer...")
         from picamera2 import Picamera2
         
         picam = Picamera2()
-        # Switch to 16:9 widescreen format (1280x720) to capture the wide lens FOV
+        
+        # Configure widescreen resolution mapping (1280x720) to maintain true horizontal FOV
         config = picam.create_video_configuration(main={"format": "RGB888", "size": (1280, 720)})
         picam.configure(config)
         picam.start()
@@ -73,13 +71,13 @@ def initialize_camera():
         return "picamera2"
     
     except Exception as e:
-        logger.warning(f"Picamera2 wide-angle initialization failed: {e}")
+        logger.warning(f"Picamera2 initialization sequence dropped: {e}")
         if state.picam_instance:
             try: state.picam_instance.close()
             except: pass
             state.picam_instance = None
 
-    # Secondary Fallback
+    # Secondary Fallback Loop over V4L2 Device Nodes
     logger.info("Attempting fallback connection to /dev/video0 via OpenCV V4L2...")
     cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
     if cap.isOpened():
@@ -92,22 +90,21 @@ def initialize_camera():
     return None
 
 def capture_worker():
-    """Dedicated thread execution loop to acquire frames from the hardware device."""
+    """Acquires image frames continuously from the physical hardware device."""
     backend = initialize_camera()
     if not backend:
-        logger.error("Capture thread exiting: No working camera device available.")
+        logger.error("Acquisition worker exiting: No video pipeline stream accessible.")
         return
 
     state.is_running = True
-    logger.info("Wide-angle frame acquisition loop running smoothly.")
+    logger.info("Frame acquisition worker thread running smoothly.")
 
     while state.is_running:
         try:
             if backend == "picamera2":
-                # Raw layout array grab
+                # Extract wide-angle raw image sequence
                 rgb_frame = state.picam_instance.capture_array()
-                
-                # FIX: Slice matrix directly to correct BGR format natively
+                # Correct color spaces instantly by aligning to traditional BGR space
                 bgr_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
             else:
                 ret, bgr_frame = state.v4l2_instance.read()
@@ -119,12 +116,13 @@ def capture_worker():
                 state.latest_frame = bgr_frame.copy()
 
         except Exception as e:
-            logger.error(f"Error inside frame acquisition thread loop: {e}")
+            logger.error(f"Error executing raw pipeline matrix grab: {e}")
             time.sleep(0.1)
 
-        time.sleep(0.01) # Maximize throughput
+        time.sleep(0.01)
 
-    # Cleanup
+    # Teardown sequences
+    logger.info("Releasing camera hardware allocations...")
     if state.picam_instance:
         try:
             state.picam_instance.stop()
@@ -135,17 +133,17 @@ def capture_worker():
 
 def ai_inference_worker():
     """
-    Dedicated core processing thread. Avoids blocking the camera 
-    capture thread by pulling the latest frame and processing it with YOLOv8.
+    Decoupled processing engine running YOLOv8 object detection tracking
+    without dragging down the main capture framework frequency.
     """
     try:
-        logger.info("Loading object detection model models into memory...")
+        logger.info("Loading object detection model targets into memory...")
         from ultralytics import YOLO
-        # Using yolov8n.pt (Nano) to maximize frame processing speeds on the Pi 5 CPU/GPU matrix
+        # Using yolov8n.pt (Nano version) to maximize frame compilation speeds on the Pi 5
         state.yolo_model = YOLO("yolov8n.pt")
-        logger.info("--- AI YOLOV8 CORE SYSTEM ONLINE ---")
+        logger.info("--- DASHCAM AI INFERENCE ENGINE ONLINE ---")
     except Exception as e:
-        logger.error(f"Failed to spin up AI Inference subsystem framework: {e}")
+        logger.error(f"Failed to compile AI object models: {e}")
         return
 
     while state.is_running:
@@ -154,36 +152,31 @@ def ai_inference_worker():
             continue
 
         try:
-            # Thread-safe snapshot copy
             with state.lock:
                 frame_to_process = state.latest_frame.copy()
 
-            # Execute real-time lightweight local target prediction scanning
-            # We filter predictions to classes: 0 (person), 2 (car), 3 (motorcycle), 5 (bus), 7 (truck), 9 (traffic light)
+            # Filter classes to extract typical road environments:
+            # 0: person, 2: car, 3: motorcycle, 5: bus, 7: truck, 9: traffic light
             results = state.yolo_model(frame_to_process, verbose=False, classes=[0, 2, 3, 5, 7, 9])
             
-            # Extract an annotated frame with bounding boxes plotted
+            # Generate the bounding box layout overlay matrix
             annotated = results[0].plot()
-
-            # Optional Motor Tracking Demo: If an object gets dangerously close to a screen edge,
-            # we can trigger I2C movement commands to align the motorized mount.
-            # Example: command_motor_movement(pan_angle=90, tilt_angle=45)
 
             with state.lock:
                 state.annotated_frame = annotated
 
         except Exception as e:
-            logger.error(f"Error executing frame AI prediction loop: {e}")
+            logger.error(f"Error inside AI vision tracking thread: {e}")
             time.sleep(0.1)
 
         time.sleep(0.01)
 
 def generate_mjpeg_stream():
-    """Continuous loop generating the live MJPEG video broadcast."""
-    logger.info("Client attached to live dashboard AI stream feed channel.")
+    """Yields continuous boundary frames to provide a real-time stream."""
+    logger.info("Client connected to live dashboard AI stream channel.")
     while state.is_running:
         with state.lock:
-            # Fall back to raw capture frames if the AI tracking pipeline is still booting up
+            # Prioritize the AI-annotated stream frame, fallback to raw matrix if booting up
             frame_matrix = state.annotated_frame if state.annotated_frame is not None else state.latest_frame
         
         if frame_matrix is None:
@@ -203,7 +196,7 @@ def generate_mjpeg_stream():
 
 @asynccontextmanager
 async def lifespan_handler(app: FastAPI):
-    # Startup Setup Procedures
+    # App Initialization Sequences
     init_motor_hardware()
     
     capture_thread = threading.Thread(target=capture_worker, daemon=True)
@@ -213,7 +206,7 @@ async def lifespan_handler(app: FastAPI):
     ai_thread.start()
     
     yield
-    # Shutdown Processing Sequences
+    # App Shutdown Sequences
     state.is_running = False
     if state.i2c_bus:
         try: state.i2c_bus.close()
@@ -223,22 +216,22 @@ app = FastAPI(title="LYNCUS Dashcam Engine", lifespan=lifespan_handler)
 
 @app.get("/video_frame.jpg")
 def get_video_frame():
-    """Serves a single snapshot frame."""
+    """Serves a static snapshot frame with the active layers applied."""
     with state.lock:
         frame_matrix = state.annotated_frame if state.annotated_frame is not None else state.latest_frame
         if frame_matrix is None:
-            return Response(content="Camera initialization pending.", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+            return Response(content="Camera pipeline starting...", status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         img_copy = frame_matrix.copy()
 
     success, encoded_jpeg = cv2.imencode(".jpg", img_copy)
     if not success:
-        return Response(content="Compression error.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(content="Matrix compression error.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response(content=encoded_jpeg.tobytes(), media_type="image/jpeg")
 
 @app.get("/video_feed")
 def get_live_video_feed():
-    """Exposes the real-time AI-annotated MJPEG live video broadcast pipeline."""
+    """Exposes the continuous real-time AI-annotated MJPEG live video stream."""
     return StreamingResponse(generate_mjpeg_stream(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/list_incidents")
