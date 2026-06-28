@@ -35,63 +35,29 @@ class PiCamera(BaseCamera):
             self.frame_height = int(analytics_cfg.get("frame_height", 480))
             self.target_fps = float(analytics_cfg.get("fps", 20.0))
 
-            source = analytics_cfg.get("video_source", 0)
-            candidates = []
-            if isinstance(source, str) and source.isdigit():
-                candidates.append(int(source))
-            elif isinstance(source, str) and source.startswith("/dev/video"):
-                candidates.append(source)
-                try:
-                    candidates.append(int(source.replace("/dev/video", "")))
-                except ValueError:
-                    pass
-            else:
-                candidates.append(source)
-
-            if 0 not in candidates: candidates.append(0)
-            if 1 not in candidates: candidates.append(1)
-            if 2 not in candidates: candidates.append(2)
-
-            self.cap = None
-            opened_from = None
-            attempted = []
+            logger.info("Initializing Raspberry Pi 5 PiSP GStreamer source pipeline...")
             
-            for candidate in candidates:
-                for backend in (cv2.CAP_V4L2, cv2.CAP_ANY):
-                    attempted.append(f"{candidate} via backend {backend}")
-                    logger.info("Connecting to camera source: %s (backend=%s)", candidate, backend)
-                    cap = cv2.VideoCapture(candidate, backend)
-                    if cap is not None and cap.isOpened():
-                        self.cap = cap
-                        opened_from = (candidate, backend)
-                        break
-                    if cap is not None:
-                        cap.release()
-                if self.cap is not None:
-                    break
+            # Formulate a native GStreamer ingestion string targeted at the new PiSP layer
+            gst_pipeline = (
+                f"libcamerasrc ! "
+                f"video/x-raw, width={self.frame_width}, height={self.frame_height}, framerate={int(self.target_fps)}/1 ! "
+                f"videoconvert ! appsink drop=true max-buffers=2"
+            )
 
-            if self.cap is None:
-                raise RuntimeError("Could not open camera source. Attempted: " + ", ".join(attempted))
+            logger.info("Connecting to camera via GStreamer: %s", gst_pipeline)
+            
+            # Initialize VideoCapture via GStreamer backend explicitly
+            self.cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
 
-            logger.info("Camera connected successfully using source=%s backend=%s", opened_from[0], opened_from[1])
+            if self.cap is None or not self.cap.isOpened():
+                raise RuntimeError(f"Could not open camera source using Pi5 GStreamer pipeline string: {gst_pipeline}")
 
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
+            logger.info("Camera connected successfully using libcamerasrc pipeline backend.")
 
-            # --- RESILIENT V4L2 HARDWARE TUNING PROPERTIES ---
-            props = [
-                (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"),
-                (cv2.CAP_PROP_EXPOSURE, 150, "Fast Shutter Speed Limit"),
-                (cv2.CAP_PROP_CONTRAST, 45, "High Text Contrast Expansion"),
-                (cv2.CAP_PROP_GAIN, 24, "Digital Gain Amplification")
-            ]
-
-            for prop_id, val, desc in props:
-                success = self.cap.set(prop_id, val)
-                if success:
-                    logger.info(f"  [SUCCESS] Set camera register: {desc} -> {val}")
-                else:
-                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not natively supported by camera firmware.")
+            # --- HARDWARE TUNING NOTE ---
+            # Native register parameter modifications (e.g., manual exposure limits) are handled 
+            # via rpicam configurations or camera tuning JSON maps inside the Debian OS layer 
+            # rather than raw V4L2 ioctl properties on Raspberry Pi 5 hardware.
 
             src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if src_fps > 0 and np.isfinite(src_fps):
@@ -132,8 +98,8 @@ class PiCamera(BaseCamera):
             if self.writer is not None and self.writer.isOpened():
                 try:
                     self.writer.write(annotated)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Failed to write frame to active clip: %s", e)
 
         return True
 
