@@ -1,7 +1,45 @@
+
 # AI Dashcam (Raspberry Pi Production)
 
 Local-first AI dashcam designed for **Raspberry Pi deployment**.  
-macOS is used only as a **development/test environment**.
+
+# AI Dashcam Engine
+> A High-Performance, Multithreaded Edge Vision Platform for the Raspberry Pi 5
+
+[![Dev.to Article](https://img.shields.io/badge/Read_The_Story-Dev.to-blueviolet?style=flat-for-the-badge&logo=devto)](https://dev.to/kamalsoft/from-shelf-to-street-how-we-built-a-widescreen-ai-dashcam-using-a-raspberry-pi-5-and-yolov8-23j1)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-for-the-badge)](https://opensource.org/licenses/MIT)
+
+Welcome to the **AI Dashcam Engine** repository. This platform turns an everyday Raspberry Pi 5 and an IMX219 lens module into a real-time, edge-computing intelligent traffic tracking assistant. 
+
+Designed entirely around modular, object-oriented, and thread-safe Python principles, this engine splits camera execution, local neural network processing, and network broadcasting into isolated concurrent tasks. This completely eliminates UI stuttering, keeping the camera capture rolling at maximum frames-per-second even under heavy edge AI loads.
+
+
+<img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/497fdf2b-aa9f-4972-b84d-66778c53d6f0" />
+
+
+## How the system works! 
+```mermaid
+graph TD
+    %% Shared State Container
+    subgraph ServerState [Thread-Safe ServerState Memory]
+        Lock[threading.Lock]
+        FrameBuffer[Raw RGB888 Frame Matrix]
+        AnnotatedBuffer[Annotated BGR Frame Buffer]
+    end
+
+    %% Isolated Threads
+    Cam[1. Hardware Capture Thread] -->|Pulls 20+ FPS Raw Stream| FrameBuffer
+    
+    FrameBuffer -->|Zero-Overhead NumPy Copy| AI[2. Local Inference Thread]
+    AI -->|YOLOv8 Nano Analysis & Filter| AnnotatedBuffer
+    
+    AnnotatedBuffer -->|Multipart Streaming Buffer| API[3. FastAPI Server Thread]
+    API -->|Live MJPEG Broadcast| Driver[Driver's Browser Interface]
+
+    %% Style Adjustments
+    style ServerState fill:#1f1f1f,stroke:#00dbff,stroke-width:2px;
+    style Lock fill:#ff3e3e,stroke:#fff;
+```
 
 ## Deployment Scope
 
