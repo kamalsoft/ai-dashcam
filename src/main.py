@@ -24,7 +24,7 @@ logger = logging.getLogger("NanovianDashcam")
 
 APP_CONFIG = {
     "storage": {
-        "clip_dir": str(Path.home() / "ai-dashcam-clips"),
+        "clip_dir": str(Path(__file__).resolve().parents[1] / "clips"),
         "max_storage_mb": 2000,
         "clip_duration_seconds": 45,
         "incident_clip_duration_seconds": 120,
@@ -230,11 +230,10 @@ class DashcamOrchestrator:
                         self.ai_frame_queue.put_nowait(raw_frame)
                     except queue.Full:
                         pass
-                    
-                    if self.latest_encoded_frame is None:
-                        ret, encoded_img = cv2.imencode('.jpg', raw_frame)
-                        if ret: 
-                            self.latest_encoded_frame = encoded_img.tobytes()
+
+                    ret, encoded_img = cv2.imencode('.jpg', raw_frame)
+                    if ret:
+                        self.latest_encoded_frame = encoded_img.tobytes()
 
                 sleep_for = frame_duration - (time.monotonic() - loop_start)
                 if sleep_for > 0: 
@@ -266,7 +265,17 @@ async def video_feed():
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + orchestrator.latest_encoded_frame + b'\r\n')
             await asyncio.sleep(0.05)
-    return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+    headers = {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Pragma": "no-cache",
+        "Expires": "0",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=headers,
+    )
 
 @app.get("/list_incidents")
 def list_incidents():

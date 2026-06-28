@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,12 +12,25 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         /* Modern Scrollbar Optimization */
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 9999px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
     </style>
 </head>
+
 <body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
     <div id="root" class="flex flex-col min-h-screen"></div>
 
@@ -27,14 +41,15 @@
             const [activePreview, setActivePreview] = React.useState(null);
             const [systemLogs, setSystemLogs] = React.useState([]);
             const [isCleaning, setIsCleaning] = React.useState(false);
-            
+            const [liveFeedNonce, setLiveFeedNonce] = React.useState(Date.now());
+
             const [preferences, setPreferences] = React.useState({
                 custom_location_label: 'Naperville, IL',
                 time_format_24h: false,
                 date_format: '%Y-%m-%d'
             });
 
-            const API_BASE = ''; 
+            const API_BASE = '';
 
             const addLog = (msg, type = 'info') => {
                 const timestamp = new Date().toLocaleTimeString();
@@ -57,6 +72,12 @@
                 addLog('Nanovian Dashcam Gateway UI initialized successfully.', 'info');
                 return () => clearInterval(interval);
             }, []);
+
+            React.useEffect(() => {
+                if (!isLive || activePreview) return;
+                const refresh = setInterval(() => setLiveFeedNonce(Date.now()), 45000);
+                return () => clearInterval(refresh);
+            }, [isLive, activePreview]);
 
             // Dynamic layout pass parsing native lucide-icon DOM changes
             React.useEffect(() => {
@@ -134,12 +155,12 @@
                             <div>
                                 <h1 className="font-bold text-lg tracking-tight text-white">Nanovian Labs ADAS Gate</h1>
                                 <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                                    <lucide-icon name="map-pin" class="h-3 w-3 text-slate-500"></lucide-icon> 
+                                    <lucide-icon name="map-pin" class="h-3 w-3 text-slate-500"></lucide-icon>
                                     <span>{preferences.custom_location_label} • Edge Engine Active</span>
                                 </p>
                             </div>
                         </div>
-                        
+
                         <div className="flex items-center space-x-2">
                             {isLive ? (
                                 <button onClick={() => togglePipeline('stop')} className="px-3.5 py-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg hover:bg-rose-500/20 transition text-sm flex items-center gap-2 font-medium cursor-pointer">
@@ -158,7 +179,7 @@
 
                     {/* Dashboard Mesh Frame */}
                     <main className="max-w-[1600px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
-                        
+
                         {/* Feed Monitor Array Column */}
                         <section className="lg:col-span-7 space-y-6 flex flex-col justify-between">
                             <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col">
@@ -175,22 +196,25 @@
                                         </button>
                                     )}
                                 </div>
-                                
+
                                 <div className="aspect-video bg-black flex items-center justify-center relative flex-1">
                                     {activePreview ? (
-                                        <video 
+                                        <video
                                             key={activePreview.url}
-                                            src={activePreview.url} 
-                                            controls 
-                                            autoPlay 
+                                            src={activePreview.url}
+                                            controls
+                                            autoPlay
                                             className="w-full h-full object-contain"
                                         />
                                     ) : isLive ? (
-                                        <img 
-                                            src="/video_feed" 
+                                        <img
+                                            src={`/video_feed?nonce=${liveFeedNonce}`}
                                             alt="ADAS Compute Pipeline Target Stream"
-                                            className="w-full h-full object-contain" 
-                                            onError={() => addLog('Video feed stream dropped or lost sync.', 'error')}
+                                            className="w-full h-full object-contain"
+                                            onError={() => {
+                                                addLog('Video feed stream dropped or lost sync. Reconnecting...', 'error');
+                                                setLiveFeedNonce(Date.now());
+                                            }}
                                         />
                                     ) : (
                                         <div className="text-center space-y-2.5">
@@ -251,20 +275,20 @@
                                                 <div className="flex-1 min-w-0">
                                                     <h4 className="text-xs font-mono font-bold text-slate-200 truncate">{incident.incident_id}</h4>
                                                     <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
-                                                        <lucide-icon name="clock" class="h-3 w-3 text-slate-600"></lucide-icon> 
+                                                        <lucide-icon name="clock" class="h-3 w-3 text-slate-600"></lucide-icon>
                                                         <span>ADAS Lock Event Capture</span>
                                                     </p>
                                                 </div>
 
                                                 <div className="flex items-center space-x-1.5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-150 shrink-0">
-                                                    <button 
+                                                    <button
                                                         onClick={() => setActivePreview({ id: incident.incident_id, url: incident.video_url })}
                                                         className="p-2 bg-slate-800 hover:bg-emerald-500/10 border border-slate-700 hover:border-emerald-500/30 text-slate-300 hover:text-emerald-400 rounded-lg transition cursor-pointer"
                                                         title="Stream Clip Inside Canvas"
                                                     >
                                                         <lucide-icon name="play" class="h-3.5 w-3.5 fill-current"></lucide-icon>
                                                     </button>
-                                                    <a 
+                                                    <a
                                                         href={`/download_clip?type=incidents&id=${incident.incident_id}`}
                                                         className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition flex items-center justify-center cursor-pointer"
                                                         title="Download Binary Media File"
@@ -289,19 +313,19 @@
                                     <form onSubmit={savePreferences} className="space-y-3 flex-1 flex flex-col justify-between">
                                         <div>
                                             <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">HUD Geo-Label</label>
-                                            <input 
-                                                type="text" 
+                                            <input
+                                                type="text"
                                                 value={preferences.custom_location_label}
-                                                onChange={e => setPreferences({...preferences, custom_location_label: e.target.value})}
+                                                onChange={e => setPreferences({ ...preferences, custom_location_label: e.target.value })}
                                                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-slate-700 transition"
                                             />
                                         </div>
                                         <div className="flex items-center justify-between py-1">
                                             <span className="text-[11px] text-slate-400 font-medium">Military 24H Clock</span>
-                                            <input 
-                                                type="checkbox" 
+                                            <input
+                                                type="checkbox"
                                                 checked={preferences.time_format_24h}
-                                                onChange={e => setPreferences({...preferences, time_format_24h: e.target.checked})}
+                                                onChange={e => setPreferences({ ...preferences, time_format_24h: e.target.checked })}
                                                 className="rounded bg-slate-950 border-slate-800 text-emerald-500 focus:ring-0 cursor-pointer"
                                             />
                                         </div>
@@ -323,25 +347,25 @@
                                         </p>
                                     </div>
                                     <div className="space-y-2">
-                                        <button 
-                                            onClick={runStorageClean} 
+                                        <button
+                                            onClick={runStorageClean}
                                             disabled={isCleaning}
                                             className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold border border-slate-700 transition disabled:opacity-50 cursor-pointer"
                                         >
                                             {isCleaning ? 'Sweeping Target Array...' : 'Run Garbage Clean Sweep'}
                                         </button>
-                                        <button 
+                                        <button
                                             onClick={clearStorage}
                                             className="w-full py-2 bg-rose-950/30 hover:bg-rose-900/30 text-rose-400 rounded-lg text-xs font-semibold border border-rose-900/20 transition flex items-center justify-center gap-1.5 cursor-pointer"
                                         >
-                                            <lucide-icon name="trash-2" class="h-3.5 w-3.5"></lucide-icon> 
+                                            <lucide-icon name="trash-2" class="h-3.5 w-3.5"></lucide-icon>
                                             <span>Wipe Saved Media Cache</span>
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </section>
-                        
+
                     </main>
                 </div>
             );
@@ -351,4 +375,5 @@
         root.render(<DashcamDashboard />);
     </script>
 </body>
+
 </html>
