@@ -14,7 +14,10 @@ Welcome to the **AI Dashcam Engine** repository. This platform turns an everyday
 Designed entirely around modular, object-oriented, and thread-safe Python principles, this engine splits camera execution, local neural network processing, and network broadcasting into isolated concurrent tasks. This completely eliminates UI stuttering, keeping the camera capture rolling at maximum frames-per-second even under heavy edge AI loads.
 
 
-<img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/497fdf2b-aa9f-4972-b84d-66778c53d6f0" />
+<!--<img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/497fdf2b-aa9f-4972-b84d-66778c53d6f0" /> -->
+
+<img width="2752" height="1536" alt="image" src="https://github.com/user-attachments/assets/e749c143-ce73-4892-a97a-da3f05484f1a" />
+
 
 
 ## How the system works! 
