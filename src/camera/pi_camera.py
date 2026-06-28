@@ -162,8 +162,8 @@ class PiCamera(BaseCamera):
             self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
-            # Using mp4v layout layer container format for hardware compatibility on Linux ARM environments
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            # Using avc1 layout layer container format for hardware compatibility on Linux ARM environments
+            fourcc = cv2.VideoWriter_fourcc(*"avc1") # avc1 matches the web-native H.264 standard
             self.writer = cv2.VideoWriter(
                 output_path,
                 fourcc,
