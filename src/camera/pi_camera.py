@@ -100,6 +100,7 @@ class PiCamera(BaseCamera):
     def _apply_hud(self, frame):
         """Applies highly-configurable real-time text layers using regional preferences."""
         pref = self.config.get("user_preferences", {})
+        gps = self.config.get("gps", {})
         date_fmt = pref.get("date_format", "%Y-%m-%d")
         use_24h = pref.get("time_format_24h", False)
         loc_label = pref.get("custom_location_label", "GPS Monitoring")
@@ -109,9 +110,27 @@ class PiCamera(BaseCamera):
         
         ts = time.strftime(full_timestamp_mask)
         geo_str = f"FPS: {self.target_fps:.1f} | {loc_label}"
+        lat = gps.get("latitude")
+        lon = gps.get("longitude")
 
         cv2.putText(frame, f"Time: {ts}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, geo_str, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
+        if lat is not None and lon is not None:
+            try:
+                lat_val = float(lat)
+                lon_val = float(lon)
+                cv2.putText(
+                    frame,
+                    f"Lat: {lat_val:.6f}  Lon: {lon_val:.6f}",
+                    (10, 72),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+            except (TypeError, ValueError):
+                pass
         
         return frame
 
@@ -139,6 +158,9 @@ class PiCamera(BaseCamera):
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
         """Flushes the rolling pre-buffer safely to disk inside a cross-thread lock block."""
+        if not incident_clip_path.endswith(".mkv"):
+            incident_clip_path = os.path.splitext(incident_clip_path)[0] + ".mkv"
+
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
         with self._lock:
             self.start_recording(incident_clip_path)
@@ -151,28 +173,20 @@ class PiCamera(BaseCamera):
     def start_recording(self, output_path: str) -> None:
         with self._lock:
             self.stop_recording()
+            
+            # Force Matroska encapsulation to enforce clean software layout
+            if not output_path.endswith(".mkv"):
+                output_path = os.path.splitext(output_path)[0] + ".mkv"
+
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-            # Prefer broadly supported MP4 codecs first; fallback to others if unavailable.
-            codec_candidates = ["mp4v", "avc1", "H264", "X264"]
-            fps = float(self.target_fps)
-            frame_size = (int(self.frame_width), int(self.frame_height))
-
-            self.writer = None
-            for codec in codec_candidates:
-                fourcc = cv2.VideoWriter_fourcc(*codec)
-                writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
-                if writer is not None and writer.isOpened():
-                    self.writer = writer
-                    logger.info("Recording started with codec=%s path=%s", codec, output_path)
-                    return
-                if writer is not None:
-                    writer.release()
-                logger.warning("VideoWriter codec unavailable: %s", codec)
-
-            raise RuntimeError(
-                "Failed to initialize VideoWriter for "
-                f"{output_path}. Tried codecs: {', '.join(codec_candidates)}"
+            
+            # --- FORCE SOFTWARE LIBX264 COMPRESSION ---
+            fourcc = cv2.VideoWriter_fourcc(*"X264")
+            self.writer = cv2.VideoWriter(
+                output_path,
+                fourcc,
+                float(self.target_fps),
+                (int(self.frame_width), int(self.frame_height))
             )
 
     def stop_recording(self) -> None:

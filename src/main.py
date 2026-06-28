@@ -9,9 +9,8 @@ import cv2
 import asyncio
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 from contextlib import asynccontextmanager
@@ -33,11 +32,15 @@ APP_CONFIG = {
     "analytics": {
         "min_confidence": 0.40,
         "video_source": "/dev/video0",
-        "fps": 20.0,
+        "fps": 50.0,
     },
     "network": {
         "bind_address": "0.0.0.0",
         "port": 8000,
+    },
+    "gps": {
+        "latitude": None,
+        "longitude": None,
     },
     "user_preferences": {
         "timezone": "America/Chicago",
@@ -51,6 +54,11 @@ class UserPreferencesSchema(BaseModel):
     custom_location_label: str
     time_format_24h: bool
     date_format: str
+
+
+class GPSCoordinatesSchema(BaseModel):
+    latitude: float
+    longitude: float
 
 class DashcamOrchestrator:
     def __init__(self, config: dict):
@@ -78,13 +86,8 @@ class DashcamOrchestrator:
             return
         clip_root = Path(self.config["storage"]["clip_dir"]) / "normal"
         clip_root.mkdir(parents=True, exist_ok=True)
-        clip_path = clip_root / f"clip_{self._ts()}.mp4"
-        try:
-            self.camera.start_recording(str(clip_path))
-        except Exception as e:
-            logger.error("Failed to start normal recording: %s", e)
-            self.active_normal_clip = None
-            return
+        clip_path = clip_root / f"clip_{self._ts()}.mkv"
+        self.camera.start_recording(str(clip_path))
         self.storage_manager.register_active_file(str(clip_path))
         self.active_normal_clip = str(clip_path)
         self.normal_clip_started_at = time.monotonic()
@@ -104,16 +107,12 @@ class DashcamOrchestrator:
         incident_root.mkdir(parents=True, exist_ok=True)
 
         snapshot_path = incident_root / "snapshot.jpg"
-        clip_path = incident_root / "incident_footage.mp4"
+        clip_path = incident_root / "incident_footage.mkv"
 
         if frame is not None:
             cv2.imwrite(str(snapshot_path), frame)
 
-        try:
-            self.camera.write_pre_buffer_to_incident(str(clip_path))
-        except Exception as e:
-            logger.error("Failed to start incident recording: %s", e)
-            return
+        self.camera.write_pre_buffer_to_incident(str(clip_path))
         self.storage_manager.register_active_file(str(clip_path))
 
         self.active_incident = {
@@ -194,7 +193,7 @@ class DashcamOrchestrator:
         try:
             while self.is_running:
                 loop_start = time.monotonic()
-                self.storage_manager.enforce_retention_policy_async(".mp4")
+                self.storage_manager.enforce_retention_policy_async(".mkv")
 
                 if self.active_incident:
                     elapsed = time.monotonic() - self.active_incident["started_at"]
@@ -243,9 +242,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 orchestrator = DashcamOrchestrator(APP_CONFIG)
 
-Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
-app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
-
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard_home_screen():
     template_path = Path(__file__).parent / "templates" / "index.html"
@@ -272,13 +268,64 @@ def list_incidents():
     entries = []
     for p in sorted(incidents_dir.iterdir(), reverse=True):
         if p.is_dir():
+            has_snap = (p / "snapshot.jpg").exists()
             entries.append({
                 "incident_id": p.name,
-                "has_snapshot": (p / "snapshot.jpg").exists(),
-                "video_url": f"/clips/incidents/{p.name}/incident_footage.mp4",
-                "snapshot_url": f"/clips/incidents/{p.name}/snapshot.jpg" if (p / "snapshot.jpg").exists() else None
+                "has_snapshot": has_snap,
+                "video_url": f"/api/media/stream?type=incidents&id={p.name}",
+                "snapshot_url": f"/api/media/snapshot?id={p.name}" if has_snap else None
             })
     return {"incidents": entries}
+
+# --- ADVANCED HTTP BYTE-RANGE VIDEO STREAMING ROUTER ---
+@app.get("/api/media/stream")
+def stream_dashcam_video(type: str, id: str, range: str = Header(None)):
+    """Natively handles partial byte-range tracking requests for clean in-browser streaming."""
+    base_dir = Path(APP_CONFIG["storage"]["clip_dir"]) / type / id
+    video_path = base_dir / "incident_footage.mkv"
+    
+    if type == "normal":
+        base_dir = Path(APP_CONFIG["storage"]["clip_dir"]) / "normal"
+        video_path = base_dir / id
+
+    if not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail="Video track entry target missing.")
+
+    file_size = video_path.stat().st_size
+    start, end = 0, file_size - 1
+
+    if range:
+        parts = range.replace("bytes=", "").split("-")
+        if parts[0]: start = int(parts[0])
+        if parts[1]: end = int(parts[1])
+
+    chunk_size = (end - start) + 1
+    
+    def video_chunk_generator():
+        with open(video_path, "rb") as video_file:
+            video_file.seek(start)
+            bytes_left = chunk_size
+            while bytes_left > 0:
+                chunk = video_file.read(min(128 * 1024, bytes_left))
+                if not chunk:
+                    break
+                bytes_left -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(chunk_size),
+        "Content-Type": "video/webm"  # Direct injection mapping forces unified playback behavior
+    }
+    return StreamingResponse(video_chunk_generator(), status_code=206, headers=headers)
+
+@app.get("/api/media/snapshot")
+def get_incident_snapshot(id: str):
+    snap_path = Path(APP_CONFIG["storage"]["clip_dir"]) / "incidents" / id / "snapshot.jpg"
+    if not snap_path.exists():
+        raise HTTPException(status_code=404, detail="Snapshot file not found.")
+    return FileResponse(snap_path, media_type="image/jpeg")
 
 @app.post("/update_preferences")
 def update_preferences(prefs: UserPreferencesSchema):
@@ -290,6 +337,25 @@ def update_preferences(prefs: UserPreferencesSchema):
         return {"status": "success", "message": "Global preferences applied successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to flash configuration: {str(e)}")
+
+
+@app.post("/update_gps")
+def update_gps_coordinates(gps: GPSCoordinatesSchema):
+    try:
+        APP_CONFIG["gps"]["latitude"] = float(gps.latitude)
+        APP_CONFIG["gps"]["longitude"] = float(gps.longitude)
+        logger.info(
+            "GPS coordinates updated: latitude=%s longitude=%s",
+            APP_CONFIG["gps"]["latitude"],
+            APP_CONFIG["gps"]["longitude"],
+        )
+        return {
+            "status": "success",
+            "message": "GPS coordinates applied to live HUD and recordings.",
+            "gps": APP_CONFIG["gps"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to apply GPS coordinates: {str(e)}")
 
 @app.post("/api/system/stop")
 def stop_recording_lifecycle():
@@ -353,25 +419,22 @@ def clear_all_saved_media():
 @app.post("/api/storage/clean")
 def clean_stale_storage():
     logger.info("On-demand maintenance sweep initialized manually over API gateway.")
-    orchestrator.storage_manager.enforce_retention_policy_async(".mp4")
+    orchestrator.storage_manager.enforce_retention_policy_async(".mkv")
     return {"status": "success", "message": "Garbage collector sweep finished processing storage array profiles."}
 
 @app.get("/download_clip")
-def download_clip(clip_relative_path: str):
-    base_storage_dir = Path(APP_CONFIG["storage"]["clip_dir"])
-    target_file_path = (base_storage_dir / clip_relative_path).resolve()
+def download_clip(type: str, id: str):
+    """Secure direct download asset handler routing for clean binary file delivery."""
+    base_dir = Path(APP_CONFIG["storage"]["clip_dir"]) / type / id
+    video_path = base_dir / "incident_footage.mkv"
+    
+    if type == "normal":
+        video_path = Path(APP_CONFIG["storage"]["clip_dir"]) / "normal" / id
 
-    if not str(target_file_path).startswith(str(base_storage_dir.resolve())):
-        raise HTTPException(status_code=403, detail="Access denied. Directory traversal blocked.")
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Requested file asset missing.")
 
-    if not target_file_path.exists() or not target_file_path.is_file():
-        raise HTTPException(status_code=404, detail="Requested dashcam clip footage not found.")
-
-    return FileResponse(
-        path=target_file_path,
-        media_type="video/mp4",
-        filename=target_file_path.name
-    )
+    return FileResponse(path=video_path, media_type="video/x-matroska", filename=video_path.name)
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host=APP_CONFIG["network"]["bind_address"], port=APP_CONFIG["network"]["port"], workers=1)

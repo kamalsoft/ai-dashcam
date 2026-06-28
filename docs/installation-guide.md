@@ -122,6 +122,17 @@ python -u src/main.py
 
 ## 9) Optional: Run on Boot (systemd)
 
+Preferred (uses bundled installer script):
+
+```bash
+cd ~/ai-dashcam
+sudo bash scripts/setup_systemd.sh
+```
+
+This creates and enables `ai-dashcam.service` so the app starts automatically on every Pi boot.
+
+Manual option:
+
 Create service file:
 
 ```bash
@@ -168,21 +179,26 @@ journalctl -u ai-dashcam -f
 ## 10) Pi Troubleshooting
 
 ### Camera not opening
+
 - Run `libcamera-hello`
 - Verify camera interface is enabled in `raspi-config`
 - Confirm device visibility:
+
   ```bash
   ls /dev/video*
   ```
 
 ### Slow inference
+
 - Lower resolution
 - Reduce FPS to 15
 - Ensure active cooling
 
 ### Fast/slow playback
+
 - Keep `target_fps`, frame pacing, and `cv2.VideoWriter` FPS aligned
 
 ### Disk fills quickly
+
 - Reduce clip duration/FPS
 - Verify retention policy is active
