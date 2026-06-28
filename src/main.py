@@ -5,13 +5,13 @@ import logging
 import threading
 import cv2
 import numpy as np
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
+from fastapi.responses import StreamingResponse
 
 # Set up clean system logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
 logger = logging.getLogger("DashcamServer")
-
-app = FastAPI(title="LYNCUS Dashcam Engine")
 
 # Global state sharing framework
 class CameraState:
@@ -112,22 +112,49 @@ def capture_worker():
     if state.v4l2_instance:
         state.v4l2_instance.release()
 
-@app.on_event("startup")
-def startup_event():
-    """Launches frame tracking on its own decoupled thread thread layer."""
+def generate_mjpeg_stream():
+    """
+    Continuous generator loop that encodes and yields frames
+    as a multipart/x-mixed-replace data stream for live video feeds.
+    """
+    logger.info("New client connected to live video stream broadcast channel.")
+    while state.is_running:
+        with state.lock:
+            if state.latest_frame is None:
+                continue
+            frame_matrix = state.latest_frame.copy()
+
+        # Compress matrix to JPEG byte arrays inside the streaming pipeline
+        success, encoded_jpeg = cv2.imencode(".jpg", frame_matrix)
+        if not success:
+            continue
+
+        # Format standard HTTP multipart boundary frames
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n'
+               b'Content-Length: ' + str(len(encoded_jpeg)).encode() + b'\r\n\r\n' +
+               encoded_jpeg.tobytes() + b'\r\n')
+        
+        # Match capture rate pacing (~30 FPS)
+        time.sleep(0.033)
+
+@asynccontextmanager
+async def lifespan_handler(app: FastAPI):
+    """Modern lifespan manager handling safe background worker state mechanics."""
+    # Startup Sequence
     t = threading.Thread(target=capture_worker, daemon=True)
     t.start()
-
-@app.on_event("shutdown")
-def shutdown_event():
-    """Signals background execution loop to gracefully close physical devices."""
+    yield
+    # Shutdown Sequence
     state.is_running = False
+
+# Initialize FastAPI with the modern lifespan context tracking
+app = FastAPI(title="LYNCUS Dashcam Engine", lifespan=lifespan_handler)
 
 @app.get("/video_frame.jpg")
 def get_video_frame():
     """
-    Serves the latest processed camera image frame directly as a JPEG binary.
-    Falls back to a HTTP 503 response if the hardware layer is offline.
+    Serves the latest processed camera image frame directly as a JPEG binary snapshot.
     """
     with state.lock:
         if state.latest_frame is None:
@@ -135,10 +162,8 @@ def get_video_frame():
                 content="Camera initialization pending or source unavailable.",
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE
             )
-        # Deepcopy matrix to release read lock immediately
         frame_matrix = state.latest_frame.copy()
 
-    # Encode internal memory matrix to binary stream distribution format
     success, encoded_jpeg = cv2.imencode(".jpg", frame_matrix)
     if not success:
         return Response(
@@ -147,6 +172,14 @@ def get_video_frame():
         )
 
     return Response(content=encoded_jpeg.tobytes(), media_type="image/jpeg")
+
+@app.get("/video_feed")
+def get_live_video_feed():
+    """Exposes the continuous real-time MJPEG live video broadcast pipeline."""
+    return StreamingResponse(
+        generate_mjpeg_stream(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
 
 @app.get("/list_incidents")
 def list_incidents():
