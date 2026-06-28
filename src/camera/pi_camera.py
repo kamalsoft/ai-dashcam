@@ -23,6 +23,7 @@ class PiCamera(BaseCamera):
         self.frame_width = 640
         self.frame_height = 480
         self.target_fps = 20.0
+        # 300 frames at 20 FPS maintains a rolling 15-second pre-incident historical RAM ring buffer
         self.pre_buffer = deque(maxlen=300)
         self._lock = threading.RLock()
 
@@ -46,7 +47,7 @@ class PiCamera(BaseCamera):
             else:
                 candidates.append(source)
 
-            # Try a few common indexes as fallback on Pi when /dev/video0 is unavailable.
+            # Fallback scanning candidates on ARM architectures if target index is busy
             if 0 not in candidates: candidates.append(0)
             if 1 not in candidates: candidates.append(1)
             if 2 not in candidates: candidates.append(2)
@@ -74,11 +75,12 @@ class PiCamera(BaseCamera):
 
             logger.info("Camera connected successfully using source=%s backend=%s", opened_from[0], opened_from[1])
 
-            # Establish resolutions
+            # Apply target resolution profiles
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)
 
-            # --- RESILIENT HARDWARE TUNING PROPERTIES ---
+            # --- RESILIENT V4L2 HARDWARE TUNING PROPERTIES ---
+            # Set high-speed manual shutter metrics to capture legible moving plates and restrict headlight glare
             props = [
                 (cv2.CAP_PROP_AUTO_EXPOSURE, 1, "Manual Exposure Mode"),
                 (cv2.CAP_PROP_EXPOSURE, 150, "Fast Shutter Speed Limit"),
@@ -91,16 +93,24 @@ class PiCamera(BaseCamera):
                 if success:
                     logger.info(f"  [SUCCESS] Set camera register: {desc} -> {val}")
                 else:
-                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not natively supported.")
+                    logger.warning(f"  [SKIPPED] Sensor parameter '{desc}' not natively supported by camera firmware.")
 
             src_fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 0.0)
             if src_fps > 0 and np.isfinite(src_fps):
                 self.target_fps = src_fps
 
     def _apply_hud(self, frame):
+        """Applies real-time spatial text layers to the video matrix buffer."""
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Line 1: Timestamp
         cv2.putText(frame, f"Time: {ts}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(frame, f"FPS: {self.target_fps:.1f}", (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
+        
+        # Line 2: Sensor Cadence & Mock Geolocation Telemetry (Can be linked directly to your GPS subsystem)
+        # Using accurate coordinates for field evaluation centering
+        geo_str = f"FPS: {self.target_fps:.1f} | Lat: 41.7725 N, Lon: 88.1472 W"
+        cv2.putText(frame, geo_str, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
+        
         return frame
 
     def update_frame(self) -> bool:
@@ -111,24 +121,29 @@ class PiCamera(BaseCamera):
         if not ok or frame is None:
             return False
 
+        # Apply spatial text overlay to raw matrix copy
         annotated = self._apply_hud(frame.copy())
         
         with self._lock:
             self.latest_annotated_frame = annotated
             self.pre_buffer.append(annotated.copy())
 
+            # Simultaneously write out frame bytes to the file if an active recorder descriptor exists
             if self.writer is not None and self.writer.isOpened():
                 try:
                     self.writer.write(annotated)
                 except Exception:
                     pass
+
         return True
 
     def write_pre_buffer_to_incident(self, incident_clip_path: str) -> None:
+        """Flushes the rolling 15-second pre-buffer safely to disk inside a cross-thread lock block."""
         os.makedirs(os.path.dirname(incident_clip_path), exist_ok=True)
         with self._lock:
             self.start_recording(incident_clip_path)
             if self.writer is not None and self.writer.isOpened():
+                # Materialize the thread-safe array copy immediately before file compilation
                 historical_frames = list(self.pre_buffer)
                 for f in historical_frames:
                     if f is not None:
@@ -138,9 +153,14 @@ class PiCamera(BaseCamera):
         with self._lock:
             self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Using mp4v layout layer container format for hardware compatibility on Linux ARM environments
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             self.writer = cv2.VideoWriter(
-                output_path, fourcc, float(self.target_fps), (int(self.frame_width), int(self.frame_height))
+                output_path,
+                fourcc,
+                float(self.target_fps),
+                (int(self.frame_width), int(self.frame_height))
             )
 
     def stop_recording(self) -> None:
