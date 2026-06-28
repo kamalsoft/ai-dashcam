@@ -100,17 +100,25 @@ class PiCamera(BaseCamera):
                 self.target_fps = src_fps
 
     def _apply_hud(self, frame):
-        """Applies real-time spatial text layers to the video matrix buffer."""
-        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        """Applies highly-configurable real-time text layers using regional preferences."""
+        # Pull formatting structures out of configuration or fall back to safe defaults
+        pref = self.config.get("user_preferences", {})
+        date_fmt = pref.get("date_format", "%Y-%m-%d")
+        use_24h = pref.get("time_format_24h", False)
+        loc_label = pref.get("custom_location_label", "GPS Monitoring")
+
+        # Set up time format mask based on preference
+        time_fmt = "%H:%M:%S" if use_24h else "%I:%M:%S %p"
+        full_timestamp_mask = f"{date_fmt} {time_fmt}"
         
-        # Line 1: Timestamp
+        # Build out strings
+        ts = time.strftime(full_timestamp_mask)
+        geo_str = f"FPS: {self.target_fps:.1f} | {loc_label}"
+
+        # Paint overlays on frame copy
         cv2.putText(frame, f"Time: {ts}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        
-        # Line 2: Sensor Cadence & Mock Geolocation Telemetry (Can be linked directly to your GPS subsystem)
-        # Using accurate coordinates for field evaluation centering
-        geo_str = f"FPS: {self.target_fps:.1f} | Lat: 41.7725 N, Lon: 88.1472 W"
         cv2.putText(frame, geo_str, (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        
+      
         return frame
 
     def update_frame(self) -> bool:

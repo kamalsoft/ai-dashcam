@@ -1,3 +1,4 @@
+# src/main.py
 import os
 import sys
 import time
@@ -8,7 +9,7 @@ import cv2
 import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from contextlib import asynccontextmanager
@@ -36,6 +37,12 @@ APP_CONFIG = {
         "bind_address": "0.0.0.0",
         "port": 8000,
     },
+    "user_preferences": {
+        "timezone": "America/Chicago",
+        "time_format_24h": False,           # False = 12-Hour Clock with AM/PM
+        "date_format": "%Y-%m-%d",          # ISO-Style Date notation
+        "custom_location_label": "Naperville, IL",
+    }
 }
 
 class DashcamOrchestrator:
@@ -100,6 +107,7 @@ class DashcamOrchestrator:
         }
 
     def _adas_worker_loop(self):
+        """Isolated background context thread dedicated to running ML model inference."""
         from ultralytics import YOLO
         logger.info("Loading YOLOv8 Model onto ADAS Context Thread...")
         self.yolo_model = YOLO("yolov8n.pt")
@@ -156,8 +164,10 @@ class DashcamOrchestrator:
                 logger.error(f"Error inside ADAS worker engine: {e}")
 
     def run_lifecycle(self):
+        """High-priority loop ensuring steady camera frame capture and video encoding."""
         try:
-            self.camera.initialize(self.config["analytics"])
+            # Pass full configuration map down to expose regional user preferences to driver
+            self.camera.initialize(self.config)
         except Exception as e:
             logger.error("Camera initialization failed: %s", e)
             self.is_running = False
@@ -199,8 +209,7 @@ class DashcamOrchestrator:
                     except queue.Full:
                         pass
                     
-                    # Fallback dynamic interface rendering to keep the web view fluid 
-                    # if the ML thread isn't overwriting it quickly enough
+                    # Direct live interface fallback loop
                     if self.latest_encoded_frame is None:
                         ret, encoded_img = cv2.imencode('.jpg', raw_frame)
                         if ret: 
@@ -221,6 +230,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 orchestrator = DashcamOrchestrator(APP_CONFIG)
 
+# Mount root clip storage directory
 Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
 
@@ -250,6 +260,24 @@ def list_incidents():
                 "snapshot_url": f"/clips/incidents/{p.name}/snapshot.jpg" if (p / "snapshot.jpg").exists() else None
             })
     return {"incidents": entries}
+
+@app.get("/download_clip")
+def download_clip(clip_relative_path: str):
+    """Secure direct download handler guarding against path-traversal attacks."""
+    base_storage_dir = Path(APP_CONFIG["storage"]["clip_dir"])
+    target_file_path = (base_storage_dir / clip_relative_path).resolve()
+
+    if not str(target_file_path).startswith(str(base_storage_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied. Directory traversal blocked.")
+
+    if not target_file_path.exists() or not target_file_path.is_file():
+        raise HTTPException(status_code=404, detail="Requested dashcam clip footage not found.")
+
+    return FileResponse(
+        path=target_file_path,
+        media_type="video/mp4",
+        filename=target_file_path.name
+    )
 
 if __name__ == "__main__":
     uvicorn.run("src.main:app", host=APP_CONFIG["network"]["bind_address"], port=APP_CONFIG["network"]["port"], workers=1)
