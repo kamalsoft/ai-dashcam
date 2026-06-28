@@ -75,7 +75,7 @@
 
             React.useEffect(() => {
                 if (!isLive || activePreview) return;
-                const refresh = setInterval(() => setLiveFeedNonce(Date.now()), 45000);
+                const refresh = setInterval(() => setLiveFeedNonce(Date.now()), 250);
                 return () => clearInterval(refresh);
             }, [isLive, activePreview]);
 
@@ -208,11 +208,10 @@
                                         />
                                     ) : isLive ? (
                                         <img
-                                            src={`/video_feed?nonce=${liveFeedNonce}`}
+                                            src={`/video_frame.jpg?nonce=${liveFeedNonce}`}
                                             alt="ADAS Compute Pipeline Target Stream"
                                             className="w-full h-full object-contain"
                                             onError={() => {
-                                                addLog('Video feed stream dropped or lost sync. Reconnecting...', 'error');
                                                 setLiveFeedNonce(Date.now());
                                             }}
                                         />

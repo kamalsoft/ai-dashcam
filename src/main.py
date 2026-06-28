@@ -10,7 +10,7 @@ import asyncio
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 import uvicorn
 from contextlib import asynccontextmanager
@@ -275,6 +275,22 @@ async def video_feed():
         frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=headers,
+    )
+
+
+@app.get("/video_frame.jpg")
+def video_frame_snapshot():
+    frame = orchestrator.latest_encoded_frame
+    if not frame:
+        raise HTTPException(status_code=503, detail="Live frame not available yet.")
+    return Response(
+        content=frame,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 @app.get("/list_incidents")
