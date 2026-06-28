@@ -1,435 +1,354 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nanovian AI Dashcam Portal</title>
+    <title>Nanovian Labs ADAS Gate</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
     <style>
-        :root {
-            --bg-main: #0f172a;
-            --bg-card: #1e293b;
-            --accent: #10b981;
-            --accent-warn: #ef4444;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-main);
-            color: var(--text-main);
-            display: flex;
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        /* Sidebar Menu Navigation */
-        aside {
-            width: 260px;
-            background-color: var(--bg-card);
-            border-right: 1px solid #334155;
-            display: flex;
-            flex-direction: column;
-            padding: 1.5rem;
-        }
-
-        .brand {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--accent);
-            margin-bottom: 2rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .menu-btn {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            text-align: left;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            font-size: 1rem;
-            cursor: pointer;
-            margin-bottom: 0.5rem;
-            transition: all 0.2s;
-        }
-
-        .menu-btn:hover,
-        .menu-btn.active {
-            background-color: #334155;
-            color: var(--text-main);
-        }
-
-        .menu-btn.active {
-            background-color: #334155;
-            color: var(--text-main);
-            border-left: 4px solid var(--accent);
-        }
-
-        /* Core Content Workspace Panels */
-        main {
-            flex: 1;
-            padding: 2rem;
-            overflow-y: auto;
-            position: relative;
-        }
-
-        .view-panel {
-            display: none;
-        }
-
-        .view-panel.active {
-            display: block;
-        }
-
-        h2 {
-            margin-bottom: 1.5rem;
-            font-size: 1.75rem;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 0.5rem;
-        }
-
-        h3 {
-            margin-bottom: 1rem;
-        }
-
-        /* Dynamic Live Feed Layout */
-        .feed-container {
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-            max-width: 800px;
-        }
-
-        .live-img {
-            width: 100%;
-            border-radius: 0.5rem;
-            border: 2px solid #334155;
-            background-color: #000;
-        }
-
-        /* Grid Tables For Media Inventory Extraction */
-        .clip-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1.5rem;
-            margin-top: 1rem;
-        }
-
-        .clip-card {
-            background-color: var(--bg-card);
-            border: 1px solid #334155;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-
-        .thumb-preview {
-            width: 100%;
-            height: 160px;
-            background-color: #000;
-            border-radius: 0.25rem;
-            object-fit: cover;
-        }
-
-        .clip-meta {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        .btn-group {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: auto;
-        }
-
-        .btn {
-            flex: 1;
-            text-align: center;
-            padding: 0.5rem;
-            border-radius: 0.25rem;
-            text-decoration: none;
-            font-size: 0.9rem;
-            font-weight: 600;
-            cursor: pointer;
-            border: none;
-            transition: background 0.15s;
-        }
-
-        .btn-primary {
-            background-color: var(--accent);
-            color: #fff;
-        }
-
-        .btn-primary:hover {
-            background-color: #059669;
-        }
-
-        .btn-secondary {
-            background-color: #475569;
-            color: #fff;
-        }
-
-        .btn-secondary:hover {
-            background-color: #334155;
-        }
-
-        .btn-warn {
-            background-color: var(--accent-warn);
-            color: #fff;
-        }
-
-        .btn-warn:hover {
-            background-color: #dc2626;
-        }
-
-        .btn-danger {
-            background-color: #7f1d1d;
-            color: #fca5a5;
-            font-weight: bold;
-        }
-
-        .btn-danger:hover {
-            background-color: #991b1b;
-        }
-
-        /* Form Controls For System Configurations */
-        .form-group {
-            margin-bottom: 1.25rem;
-            max-width: 500px;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        label {
-            font-size: 0.95rem;
-            color: var(--text-muted);
-        }
-
-        input,
-        select {
-            padding: 0.65rem;
-            background-color: var(--bg-card);
-            border: 1px solid #334155;
-            border-radius: 0.25rem;
-            color: #fff;
-            font-size: 1rem;
-        }
-
-        input:focus,
-        select:focus {
-            border-color: var(--accent);
-            outline: none;
-        }
-
-        .card-group {
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-            max-width: 600px;
-        }
-
-        .control-card {
-            background-color: var(--bg-card);
-            border: 1px solid #334155;
-            padding: 1.5rem;
-            border-radius: 0.5rem;
-        }
+        /* Modern Scrollbar Optimization */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
     </style>
 </head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
+    <div id="root" class="flex flex-col min-h-screen"></div>
 
-<body>
+    <script type="text/babel">
+        function DashcamDashboard() {
+            const [isLive, setIsLive] = React.useState(true);
+            const [incidents, setIncidents] = React.useState([]);
+            const [activePreview, setActivePreview] = React.useState(null);
+            const [systemLogs, setSystemLogs] = React.useState([]);
+            const [isCleaning, setIsCleaning] = React.useState(false);
+            
+            const [preferences, setPreferences] = React.useState({
+                custom_location_label: 'Naperville, IL',
+                time_format_24h: false,
+                date_format: '%Y-%m-%d'
+            });
 
-    <aside>
-        <div class="brand">🛰️ Nanovian AI Portal</div>
-        <button class="menu-btn active" onclick="switchView('live')">📺 Live Telemetry</button>
-        <button class="menu-btn" onclick="switchView('clips'); loadClips();">📁 Incident Footage</button>
-        <button class="menu-btn" onclick="switchView('settings')">⚙️ Configuration</button>
-        <button class="menu-btn" onclick="switchView('system')">🛠️ System Control</button>
-    </aside>
+            const API_BASE = ''; 
 
-    <main>
-        <section id="view-live" class="view-panel active">
-            <h2>Live Operational View</h2>
-            <div class="feed-container">
-                <img class="live-img" src="/video_feed" alt="Live Stream Dashboard Interface Feed Unavailable">
-                <p style="color: var(--text-muted);">🟢 Dynamic target tracking overlay engine streaming live from
-                    /dev/video0.</p>
-            </div>
-        </section>
-
-        <section id="view-clips" class="view-panel">
-            <h2>Logged Incident Captures</h2>
-            <div id="clips-loading" style="color: var(--text-muted);">Querying system retention media storage logs...
-            </div>
-            <div id="clip-grid-target" class="clip-grid"></div>
-        </section>
-
-        <section id="view-settings" class="view-panel">
-            <h2>Preferences Framework Setup</h2>
-            <form id="settings-form" onsubmit="savePreferences(event)">
-                <div class="form-group">
-                    <label>Deployment Location Tag</label>
-                    <input type="text" id="pref-location" value="Naperville, IL">
-                </div>
-                <div class="form-group">
-                    <label>Clock Interface Metric</label>
-                    <select id="pref-24h">
-                        <option value="false">12-Hour format (AM/PM)</option>
-                        <option value="true">24-Hour Military Layout</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Skeletal Date String Mask</label>
-                    <select id="pref-date">
-                        <option value="%Y-%m-%d">YYYY-MM-DD (Standard)</option>
-                        <option value="%m/%d/%Y">MM/DD/YYYY (Regional)</option>
-                        <option value="%d-%m-%Y">DD-MM-YYYY</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn btn-primary" style="max-width: 200px; padding: 0.75rem;">Save System
-                    Config</button>
-            </form>
-        </section>
-
-        <section id="view-system" class="view-panel">
-            <h2>Core Infrastructure Management</h2>
-            <div class="card-group">
-                <div class="control-card">
-                    <h3 style="color: var(--accent);">Pipeline Process Controls</h3>
-                    <div style="display: flex; gap: 1rem;">
-                        <button class="btn btn-primary" onclick="triggerSystemAction('/api/system/start')">▶️
-                            Start</button>
-                        <button class="btn btn-warn" onclick="triggerSystemAction('/api/system/stop')">⏹️ Stop</button>
-                        <button class="btn btn-secondary" onclick="triggerSystemAction('/api/system/restart')">🔄
-                            Restart</button>
-                    </div>
-                </div>
-
-                <div class="control-card">
-                    <h3 style="color: #f59e0b;">Disk Space Maintenance</h3>
-                    <div style="display: flex; gap: 1rem;">
-                        <button class="btn btn-secondary" onclick="triggerSystemAction('/api/storage/clean')">🧹 Clean
-                            (Enforce Cap)</button>
-                        <button class="btn btn-danger" onclick="confirmPurgeStorage()">☣️ Clear Storage (Wipe
-                            All)</button>
-                    </div>
-                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.75rem;">
-                        * Clean enforces the 2000MB storage limit instantly. Clear completely wipes all continuous clips
-                        and incident records.
-                    </p>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <script>
-        function switchView(viewName) {
-            document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.menu-btn').forEach(b => b.classList.remove('active'));
-
-            document.getElementById(`view-${viewName}`).classList.add('active');
-            // Safely locate active clicked element
-            if (event && event.currentTarget) {
-                event.currentTarget.classList.add('active');
-            }
-        }
-
-        async function loadClips() {
-            const container = document.getElementById('clip-grid-target');
-            const loader = document.getElementById('clips-loading');
-            container.innerHTML = '';
-            loader.style.display = 'block';
-
-            try {
-                const res = await fetch('/list_incidents');
-                const data = await res.json();
-                loader.style.display = 'none';
-
-                if (!data.incidents || data.incidents.length === 0) {
-                    container.innerHTML = `<p style="color: var(--text-muted);">No incident threat files currently preserved in storage.</p>`;
-                    return;
-                }
-
-                data.incidents.forEach(clip => {
-                    const card = document.createElement('div');
-                    card.className = 'clip-card';
-                    const imgUrl = clip.has_snapshot ? clip.snapshot_url : 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%23475569" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
-
-                    card.innerHTML = `
-                        <img class="thumb-preview" src="${imgUrl}" alt="Threat Snapshot">
-                        <div class="clip-meta">
-                            <strong>ID:</strong> ${clip.incident_id}<br>
-                            <span style="font-size:0.75rem;">Type: Threat Locked Event</span>
-                        </div>
-                        <div class="btn-group">
-                            <button class="btn btn-secondary" onclick="previewVideo('${clip.video_url}')">Preview</button>
-                            <a class="btn btn-primary" href="/download_clip?clip_relative_path=incidents/${clip.incident_id}/incident_footage.mp4" download>Download</a>
-                        </div>
-                    `;
-                    container.appendChild(card);
-                });
-            } catch (err) {
-                loader.innerText = 'Failed to fetch files from local dashboard gateway api.';
-            }
-        }
-
-        function previewVideo(url) {
-            window.open(url, '_blank');
-        }
-
-        async function savePreferences(e) {
-            e.preventDefault();
-            const payload = {
-                custom_location_label: document.getElementById('pref-location').value,
-                time_format_24h: document.getElementById('pref-24h').value === 'true',
-                date_format: document.getElementById('pref-date').value
+            const addLog = (msg, type = 'info') => {
+                const timestamp = new Date().toLocaleTimeString();
+                setSystemLogs(prev => [{ timestamp, msg, type }, ...prev.slice(0, 19)]);
             };
 
-            try {
-                const res = await fetch('/update_preferences', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (res.ok) alert('System regional settings flashed successfully!');
-            } catch (err) {
-                alert('Error submitting options configuration to runtime host.');
-            }
-        }
-
-        async function triggerSystemAction(endpoint) {
-            try {
-                const res = await fetch(endpoint, { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    alert(`System Response: ${data.message}`);
-                } else {
-                    alert(`Error: ${data.detail || 'Command processing failed.'}`);
+            const fetchIncidents = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/list_incidents`);
+                    const data = await res.json();
+                    setIncidents(data.incidents || []);
+                } catch (err) {
+                    addLog('Failed to synchronize incident library metadata.', 'error');
                 }
-            } catch (err) {
-                alert('Unable to transmit backend network operation requests.');
-            }
+            };
+
+            React.useEffect(() => {
+                fetchIncidents();
+                const interval = setInterval(fetchIncidents, 10000);
+                addLog('Nanovian Dashcam Gateway UI initialized successfully.', 'info');
+                return () => clearInterval(interval);
+            }, []);
+
+            // Dynamic layout pass parsing native lucide-icon DOM changes
+            React.useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [incidents, isLive, activePreview, systemLogs, isCleaning]);
+
+            const togglePipeline = async (action) => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/system/${action}`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        setIsLive(action === 'start' || action === 'restart');
+                        addLog(`System pipeline command [${action.toUpperCase()}] executed safely.`, 'info');
+                        fetchIncidents();
+                    }
+                } catch (err) {
+                    addLog(`Failed to signal system state transition: ${action}`, 'error');
+                }
+            };
+
+            const clearStorage = async () => {
+                if (!window.confirm('CRITICAL: Are you sure you want to permanently delete all video history loops?')) return;
+                try {
+                    const res = await fetch(`${API_BASE}/api/storage/clear`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        setIncidents([]);
+                        setActivePreview(null);
+                        addLog('Global hardware storage arrays wiped completely.', 'warning');
+                    }
+                } catch (err) {
+                    addLog('Failed to issue structural storage wipe command.', 'error');
+                }
+            };
+
+            const runStorageClean = async () => {
+                setIsCleaning(true);
+                try {
+                    const res = await fetch(`${API_BASE}/api/storage/clean`, { method: 'POST' });
+                    const data = await res.json();
+                    addLog(data.message, 'info');
+                } catch (err) {
+                    addLog('Storage allocation sweep failed.', 'error');
+                } finally {
+                    setIsCleaning(false);
+                }
+            };
+
+            const savePreferences = async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/update_preferences`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(preferences)
+                    });
+                    if (res.ok) {
+                        addLog('Global HUD operational parameters updated successfully.', 'info');
+                    }
+                } catch (err) {
+                    addLog('Failed to push configuration layers to core system.', 'error');
+                }
+            };
+
+            return (
+                <div className="flex flex-col min-h-screen">
+                    {/* Header Controls Banner */}
+                    <header className="border-b border-slate-900 bg-slate-900/40 backdrop-blur sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                            <div className="p-2.5 bg-emerald-500/10 rounded-xl border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                                <lucide-icon name="shield" class="h-5 w-5 animate-pulse"></lucide-icon>
+                            </div>
+                            <div>
+                                <h1 className="font-bold text-lg tracking-tight text-white">Nanovian Labs ADAS Gate</h1>
+                                <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                    <lucide-icon name="map-pin" class="h-3 w-3 text-slate-500"></lucide-icon> 
+                                    <span>{preferences.custom_location_label} • Edge Engine Active</span>
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2">
+                            {isLive ? (
+                                <button onClick={() => togglePipeline('stop')} className="px-3.5 py-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-lg hover:bg-rose-500/20 transition text-sm flex items-center gap-2 font-medium cursor-pointer">
+                                    <lucide-icon name="video-off" class="h-4 w-4"></lucide-icon> Stop Core
+                                </button>
+                            ) : (
+                                <button onClick={() => togglePipeline('start')} className="px-3.5 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/20 transition text-sm flex items-center gap-2 font-medium cursor-pointer">
+                                    <lucide-icon name="video" class="h-4 w-4"></lucide-icon> Start Loop
+                                </button>
+                            )}
+                            <button onClick={() => togglePipeline('restart')} className="p-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-lg hover:bg-slate-800 hover:text-white transition cursor-pointer" title="Reboot Pipeline channels">
+                                <lucide-icon name="refresh-cw" class="h-4 w-4"></lucide-icon>
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Dashboard Mesh Frame */}
+                    <main className="max-w-[1600px] w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+                        
+                        {/* Feed Monitor Array Column */}
+                        <section className="lg:col-span-7 space-y-6 flex flex-col justify-between">
+                            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl flex-1 flex flex-col">
+                                <div className="px-4 py-3 border-b border-slate-800 bg-slate-950/40 flex items-center justify-between">
+                                    <div className="flex items-center space-x-2">
+                                        <span className={`h-2.5 w-2.5 rounded-full ${isLive && !activePreview ? 'bg-rose-500 shadow-[0_0_10px_#f43f5e]' : 'bg-slate-600'}`} />
+                                        <span className="font-semibold text-xs uppercase tracking-wider text-slate-300">
+                                            {activePreview ? `PREVIEW // ${activePreview.id}` : 'LIVE AR ADAS TELEMETRY FEED'}
+                                        </span>
+                                    </div>
+                                    {activePreview && (
+                                        <button onClick={() => setActivePreview(null)} className="text-xs px-2.5 py-1 bg-slate-800 text-slate-400 rounded hover:bg-slate-700 hover:text-white transition cursor-pointer">
+                                            Return Live Stream
+                                        </button>
+                                    )}
+                                </div>
+                                
+                                <div className="aspect-video bg-black flex items-center justify-center relative flex-1">
+                                    {activePreview ? (
+                                        <video 
+                                            key={activePreview.url}
+                                            src={activePreview.url} 
+                                            controls 
+                                            autoPlay 
+                                            className="w-full h-full object-contain"
+                                        />
+                                    ) : isLive ? (
+                                        <img 
+                                            src="/video_feed" 
+                                            alt="ADAS Compute Pipeline Target Stream"
+                                            className="w-full h-full object-contain" 
+                                            onError={() => addLog('Video feed stream dropped or lost sync.', 'error')}
+                                        />
+                                    ) : (
+                                        <div className="text-center space-y-2.5">
+                                            <div className="flex justify-center text-slate-700"><lucide-icon name="video-off" class="h-10 w-10"></lucide-icon></div>
+                                            <p className="text-sm text-slate-500 font-medium">Capture Core Dormant. Pipeline Stopped.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Realtime Telemetry Logger Window */}
+                            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl">
+                                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                    <lucide-icon name="activity" class="h-4 w-4 text-emerald-400"></lucide-icon>
+                                    <span>System Orchestrator Telemetry Logs</span>
+                                </h3>
+                                <div className="bg-slate-950 rounded-lg p-3 h-40 overflow-y-auto font-mono text-xs space-y-1.5 border border-slate-900/60 custom-scrollbar">
+                                    {systemLogs.map((log, i) => (
+                                        <div key={i} className={`flex items-start gap-2 ${log.type === 'error' ? 'text-rose-400' : log.type === 'warning' ? 'text-amber-400' : 'text-slate-400'}`}>
+                                            <span className="text-slate-600 font-medium shrink-0">[{log.timestamp}]</span>
+                                            <span className="text-slate-200">{log.msg}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </section>
+
+                        {/* Incident Assets / Configurations Column */}
+                        <section className="lg:col-span-5 space-y-6 flex flex-col justify-between">
+                            <div className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl flex flex-col min-h-[380px] flex-1">
+                                <div className="p-4 border-b border-slate-800 bg-slate-950/20 flex items-center justify-between">
+                                    <h2 className="font-bold text-sm tracking-wide text-white flex items-center gap-2">
+                                        <lucide-icon name="shield-alert" class="h-4 w-4 text-amber-500"></lucide-icon>
+                                        <span>Locked Incident Containment Storage</span>
+                                    </h2>
+                                    <span className="text-xs bg-slate-950 border border-slate-800 text-slate-400 px-2.5 py-0.5 rounded-full font-mono">
+                                        {incidents.length} File Blocks
+                                    </span>
+                                </div>
+
+                                <div className="overflow-y-auto p-4 space-y-3 max-h-[440px] custom-scrollbar flex-1">
+                                    {incidents.length === 0 ? (
+                                        <div className="h-full flex flex-col items-center justify-center text-center py-12 border border-dashed border-slate-800 rounded-xl text-slate-500 space-y-2">
+                                            <div className="text-slate-600"><lucide-icon name="shield" class="h-8 w-8"></lucide-icon></div>
+                                            <p className="text-sm font-medium">No active threat metadata signature on disk.</p>
+                                        </div>
+                                    ) : (
+                                        incidents.map((incident) => (
+                                            <div key={incident.incident_id} className="bg-slate-950/40 border border-slate-800/80 rounded-xl p-3 flex gap-3 hover:border-slate-700 transition items-center group">
+                                                <div className="w-24 aspect-video bg-slate-900 rounded-lg border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center text-slate-700">
+                                                    {incident.has_snapshot ? (
+                                                        <img src={incident.snapshot_url} alt="" className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <lucide-icon name="video" class="h-4 w-4"></lucide-icon>
+                                                    )}
+                                                </div>
+
+                                                <div className="flex-1 min-w-0">
+                                                    <h4 className="text-xs font-mono font-bold text-slate-200 truncate">{incident.incident_id}</h4>
+                                                    <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1">
+                                                        <lucide-icon name="clock" class="h-3 w-3 text-slate-600"></lucide-icon> 
+                                                        <span>ADAS Lock Event Capture</span>
+                                                    </p>
+                                                </div>
+
+                                                <div className="flex items-center space-x-1.5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-150 shrink-0">
+                                                    <button 
+                                                        onClick={() => setActivePreview({ id: incident.incident_id, url: incident.video_url })}
+                                                        className="p-2 bg-slate-800 hover:bg-emerald-500/10 border border-slate-700 hover:border-emerald-500/30 text-slate-300 hover:text-emerald-400 rounded-lg transition cursor-pointer"
+                                                        title="Stream Clip Inside Canvas"
+                                                    >
+                                                        <lucide-icon name="play" class="h-3.5 w-3.5 fill-current"></lucide-icon>
+                                                    </button>
+                                                    <a 
+                                                        href={`/download_clip?type=incidents&id=${incident.incident_id}`}
+                                                        className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white rounded-lg transition flex items-center justify-center cursor-pointer"
+                                                        title="Download Binary Media File"
+                                                    >
+                                                        <lucide-icon name="download" class="h-3.5 w-3.5"></lucide-icon>
+                                                    </a>
+                                                </div>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Lower Control Actions Matrix Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                                {/* Configuration Preferences Card */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex flex-col justify-between">
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                                        <lucide-icon name="settings" class="h-4 w-4 text-slate-500"></lucide-icon>
+                                        <span>HUD Preference Layer</span>
+                                    </h3>
+                                    <form onSubmit={savePreferences} className="space-y-3 flex-1 flex flex-col justify-between">
+                                        <div>
+                                            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">HUD Geo-Label</label>
+                                            <input 
+                                                type="text" 
+                                                value={preferences.custom_location_label}
+                                                onChange={e => setPreferences({...preferences, custom_location_label: e.target.value})}
+                                                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-slate-700 transition"
+                                            />
+                                        </div>
+                                        <div className="flex items-center justify-between py-1">
+                                            <span className="text-[11px] text-slate-400 font-medium">Military 24H Clock</span>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={preferences.time_format_24h}
+                                                onChange={e => setPreferences({...preferences, time_format_24h: e.target.checked})}
+                                                className="rounded bg-slate-950 border-slate-800 text-emerald-500 focus:ring-0 cursor-pointer"
+                                            />
+                                        </div>
+                                        <button type="submit" className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-semibold transition cursor-pointer">
+                                            Apply Preference Matrix
+                                        </button>
+                                    </form>
+                                </div>
+
+                                {/* Maintenance / Data Lifecycles Card */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-xl flex flex-col justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1.5">
+                                            <lucide-icon name="hard-drive" class="h-4 w-4 text-slate-500"></lucide-icon>
+                                            <span>Storage Diagnostics</span>
+                                        </h3>
+                                        <p className="text-[11px] text-slate-400 leading-relaxed mt-1">
+                                            Manage ring array hardware data allocations, clear structural logs, or manually push runtime retention sweeps.
+                                        </p>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <button 
+                                            onClick={runStorageClean} 
+                                            disabled={isCleaning}
+                                            className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold border border-slate-700 transition disabled:opacity-50 cursor-pointer"
+                                        >
+                                            {isCleaning ? 'Sweeping Target Array...' : 'Run Garbage Clean Sweep'}
+                                        </button>
+                                        <button 
+                                            onClick={clearStorage}
+                                            className="w-full py-2 bg-rose-950/30 hover:bg-rose-900/30 text-rose-400 rounded-lg text-xs font-semibold border border-rose-900/20 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                                        >
+                                            <lucide-icon name="trash-2" class="h-3.5 w-3.5"></lucide-icon> 
+                                            <span>Wipe Saved Media Cache</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                        
+                    </main>
+                </div>
+            );
         }
 
-        function confirmPurgeStorage() {
-            if (confirm("WARNING: Are you absolutely sure you want to permanently delete all continuous clips and threat incidents from the disk array? This cannot be undone.")) {
-                triggerSystemAction('/api/storage/clear');
-            }
-        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<DashcamDashboard />);
     </script>
 </body>
-
 </html>
