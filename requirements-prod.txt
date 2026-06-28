@@ -1,4 +1,13 @@
+# requirements-prod.txt
+opencv-python==4.10.0.84
+ultralytics==8.3.40
 pyyaml==6.0.1
+torch>=2.9.0
+torchvision>=0.24.0
+transformers>=4.48.0
+pillow>=10.4.0 
+numpy>=2.1.0
+reverse_geocoder
 smbus2==0.4.3
-
-
+fastapi>=0.115.0
+uvicorn>=0.30.0
