@@ -7,6 +7,7 @@ import threading
 import queue
 import cv2
 import asyncio
+import shutil
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
@@ -19,7 +20,7 @@ from src.camera.pi_camera import PiCamera
 from src.processing.analytics import ThreatAnalytics
 from src.storage.circular_buffer import CircularBuffer
 
-# Initialize logger configuration
+# Initialize logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger("NanovianDashcam")
 
@@ -198,7 +199,7 @@ class DashcamOrchestrator:
                         self.active_incident = None
                         self._start_normal_clip()
                 else:
-                    if (time.monotonic() - self.normal_clip_started_at) >= self.config["storage"]["clip_duration_seconds"]:
+                    if self.active_normal_clip and (time.monotonic() - self.normal_clip_started_at) >= self.config["storage"]["clip_duration_seconds"]:
                         self.camera.stop_recording()
                         self.storage_manager.unregister_active_file(self.active_normal_clip)
                         self.active_normal_clip = None
@@ -206,7 +207,9 @@ class DashcamOrchestrator:
 
                 ok = self.camera.update_frame()
                 if not ok: 
-                    break
+                    # If stopped programmatically, sleep briefly to avoid pegging cpu core
+                    time.sleep(0.05)
+                    continue
 
                 raw_frame = self.camera.get_latest_frame()
                 if raw_frame is not None:
@@ -284,7 +287,79 @@ def update_preferences(prefs: UserPreferencesSchema):
         logger.info("System operational parameters updated safely over API.")
         return {"status": "success", "message": "Global preferences applied successfully."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to flash targeted system configuration options: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to flash targeted system configurations: {str(e)}")
+
+# --- ADMINISTRATIVE SYSTEM PIPELINE & STORAGE ACTIONS ---
+
+@app.post("/api/system/stop")
+def stop_recording_lifecycle():
+    """Immediately kills the active recording descriptors."""
+    with orchestrator.camera._lock:
+        if not orchestrator.active_normal_clip and not orchestrator.active_incident:
+            return {"status": "ignored", "message": "Recording loops are already dormant."}
+        
+        logger.warning("Administrative Halt requested over API. Dropping file records...")
+        orchestrator.camera.stop_recording()
+        
+        if orchestrator.active_normal_clip:
+            orchestrator.storage_manager.unregister_active_file(orchestrator.active_normal_clip)
+            orchestrator.active_normal_clip = None
+        orchestrator.active_incident = None
+        return {"status": "success", "message": "Dashcam pipeline recording safely stopped."}
+
+@app.post("/api/system/start")
+def start_recording_lifecycle():
+    """Forces standard continuous recording loop initialization."""
+    with orchestrator.camera._lock:
+        if orchestrator.active_normal_clip or orchestrator.active_incident:
+            raise HTTPException(status_code=400, detail="Recording pipeline is already active.")
+        
+        logger.info("Administrative Start requested over API. Spinning up channels...")
+        orchestrator._start_normal_clip()
+        return {"status": "success", "message": "Continuous loops re-engaged successfully."}
+
+@app.post("/api/system/restart")
+def restart_recording_lifecycle():
+    """Cycles recording handles safely without requiring a hardware process termination."""
+    with orchestrator.camera._lock:
+        logger.info("Cycle reboot requested over API. Flushing IO streams...")
+        if orchestrator.active_normal_clip or orchestrator.active_incident:
+            orchestrator.camera.stop_recording()
+            if orchestrator.active_normal_clip:
+                orchestrator.storage_manager.unregister_active_file(orchestrator.active_normal_clip)
+                orchestrator.active_normal_clip = None
+            orchestrator.active_incident = None
+            
+        orchestrator._start_normal_clip()
+        return {"status": "success", "message": "Pipeline capture cycled and rebooted successfully."}
+
+@app.post("/api/storage/clear")
+def clear_all_saved_media():
+    """Permanently purges both continuous clips and event threat folders."""
+    with orchestrator.camera._lock:
+        logger.warning("CRITICAL: Administrative Storage Clear commanded over API portal.")
+        orchestrator.camera.stop_recording()
+        
+        base_dir = Path(APP_CONFIG["storage"]["clip_dir"])
+        for sub_folder in ["normal", "incidents"]:
+            target_path = base_dir / sub_folder
+            if target_path.exists():
+                shutil.rmtree(target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+            
+        orchestrator.active_normal_clip = None
+        orchestrator.active_incident = None
+        orchestrator.storage_manager.tracked_files = []
+        
+        orchestrator._start_normal_clip()
+        return {"status": "success", "message": "All saved loops and locked incidents dropped. Storage clear."}
+
+@app.post("/api/storage/clean")
+def clean_stale_storage():
+    """Forcefully triggers your automated retention policy parser on-demand."""
+    logger.info("On-demand maintenance sweep initialized manually over API gateway.")
+    orchestrator.storage_manager.enforce_retention_policy_async(".mp4")
+    return {"status": "success", "message": "Garbage collector sweep finished processing storage array profiles."}
 
 @app.get("/download_clip")
 def download_clip(clip_relative_path: str):
