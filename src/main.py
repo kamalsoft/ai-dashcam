@@ -79,7 +79,12 @@ class DashcamOrchestrator:
         clip_root = Path(self.config["storage"]["clip_dir"]) / "normal"
         clip_root.mkdir(parents=True, exist_ok=True)
         clip_path = clip_root / f"clip_{self._ts()}.mp4"
-        self.camera.start_recording(str(clip_path))
+        try:
+            self.camera.start_recording(str(clip_path))
+        except Exception as e:
+            logger.error("Failed to start normal recording: %s", e)
+            self.active_normal_clip = None
+            return
         self.storage_manager.register_active_file(str(clip_path))
         self.active_normal_clip = str(clip_path)
         self.normal_clip_started_at = time.monotonic()
@@ -104,7 +109,11 @@ class DashcamOrchestrator:
         if frame is not None:
             cv2.imwrite(str(snapshot_path), frame)
 
-        self.camera.write_pre_buffer_to_incident(str(clip_path))
+        try:
+            self.camera.write_pre_buffer_to_incident(str(clip_path))
+        except Exception as e:
+            logger.error("Failed to start incident recording: %s", e)
+            return
         self.storage_manager.register_active_file(str(clip_path))
 
         self.active_incident = {

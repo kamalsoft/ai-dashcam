@@ -152,14 +152,27 @@ class PiCamera(BaseCamera):
         with self._lock:
             self.stop_recording()
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
-            # --- USE X264 FOR STABLE SOFTWARE H.264 ENCODING IN BROWSERS ---
-            fourcc = cv2.VideoWriter_fourcc(*"X264")
-            self.writer = cv2.VideoWriter(
-                output_path,
-                fourcc,
-                float(self.target_fps),
-                (int(self.frame_width), int(self.frame_height))
+
+            # Prefer broadly supported MP4 codecs first; fallback to others if unavailable.
+            codec_candidates = ["mp4v", "avc1", "H264", "X264"]
+            fps = float(self.target_fps)
+            frame_size = (int(self.frame_width), int(self.frame_height))
+
+            self.writer = None
+            for codec in codec_candidates:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+                if writer is not None and writer.isOpened():
+                    self.writer = writer
+                    logger.info("Recording started with codec=%s path=%s", codec, output_path)
+                    return
+                if writer is not None:
+                    writer.release()
+                logger.warning("VideoWriter codec unavailable: %s", codec)
+
+            raise RuntimeError(
+                "Failed to initialize VideoWriter for "
+                f"{output_path}. Tried codecs: {', '.join(codec_candidates)}"
             )
 
     def stop_recording(self) -> None:
