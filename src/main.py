@@ -9,8 +9,9 @@ import cv2
 import asyncio
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import uvicorn
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from src.camera.pi_camera import PiCamera
 from src.processing.analytics import ThreatAnalytics
 from src.storage.circular_buffer import CircularBuffer
 
+# Initialize logger configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
 logger = logging.getLogger("NanovianDashcam")
 
@@ -40,10 +42,15 @@ APP_CONFIG = {
     "user_preferences": {
         "timezone": "America/Chicago",
         "time_format_24h": False,           # False = 12-Hour Clock with AM/PM
-        "date_format": "%Y-%m-%d",          # ISO-Style Date notation
+        "date_format": "%Y-%m-%d",          # Standard ISO-Style notation
         "custom_location_label": "Naperville, IL",
     }
 }
+
+class UserPreferencesSchema(BaseModel):
+    custom_location_label: str
+    time_format_24h: bool
+    date_format: str
 
 class DashcamOrchestrator:
     def __init__(self, config: dict):
@@ -166,7 +173,6 @@ class DashcamOrchestrator:
     def run_lifecycle(self):
         """High-priority loop ensuring steady camera frame capture and video encoding."""
         try:
-            # Pass full configuration map down to expose regional user preferences to driver
             self.camera.initialize(self.config)
         except Exception as e:
             logger.error("Camera initialization failed: %s", e)
@@ -209,7 +215,6 @@ class DashcamOrchestrator:
                     except queue.Full:
                         pass
                     
-                    # Direct live interface fallback loop
                     if self.latest_encoded_frame is None:
                         ret, encoded_img = cv2.imencode('.jpg', raw_frame)
                         if ret: 
@@ -230,9 +235,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Nanovian AI Dashcam Gateway", lifespan=lifespan)
 orchestrator = DashcamOrchestrator(APP_CONFIG)
 
-# Mount root clip storage directory
+# Mount root clip storage directory for static layout delivery
 Path(APP_CONFIG["storage"]["clip_dir"]).mkdir(parents=True, exist_ok=True)
 app.mount("/clips", StaticFiles(directory=APP_CONFIG["storage"]["clip_dir"]), name="clips")
+
+@app.get("/", response_class=HTMLResponse)
+def serve_dashboard_home_screen():
+    """Serves the Single Page Application UI control dashboard framework."""
+    template_path = Path(__file__).parent / "templates" / "index.html"
+    if not template_path.exists():
+        raise HTTPException(status_code=404, detail="Web interface HTML template asset missing from source tree.")
+    return template_path.read_text()
 
 @app.get("/video_feed")
 async def video_feed():
@@ -260,6 +273,18 @@ def list_incidents():
                 "snapshot_url": f"/clips/incidents/{p.name}/snapshot.jpg" if (p / "snapshot.jpg").exists() else None
             })
     return {"incidents": entries}
+
+@app.post("/update_preferences")
+def update_preferences(prefs: UserPreferencesSchema):
+    """Hot-reloads user regional parameters into app memory on-the-fly."""
+    try:
+        APP_CONFIG["user_preferences"]["custom_location_label"] = prefs.custom_location_label
+        APP_CONFIG["user_preferences"]["time_format_24h"] = prefs.time_format_24h
+        APP_CONFIG["user_preferences"]["date_format"] = prefs.date_format
+        logger.info("System operational parameters updated safely over API.")
+        return {"status": "success", "message": "Global preferences applied successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to flash targeted system configuration options: {str(e)}")
 
 @app.get("/download_clip")
 def download_clip(clip_relative_path: str):
